@@ -179,19 +179,47 @@ class ObservabilityTracker:
             model_trace.duration_ms = round((model_trace.end_time - model_trace.start_time) * 1000, 2)
 
             resp_snippet = ""
+            thought_snippet = ""
             if resp and resp.content and resp.content.parts:
                 for p in resp.content.parts:
-                    if hasattr(p, "text") and p.text:
-                        resp_snippet = p.text[:300]
-                        break
+                    is_thought = getattr(p, "thought", False) is True
+                    p_text = getattr(p, "text", "") or ""
+                    if is_thought:
+                        if p_text:
+                            thought_snippet += (p_text + "\n")
+                    else:
+                        if p_text and not resp_snippet:
+                            resp_snippet = p_text[:400]
+
+            thought_snippet = thought_snippet.strip()
+            if thought_snippet:
+                model_trace.thinking_trace = thought_snippet
+                logger.info(f"[ADK Thinking Trace] 💭 [{agent_name}] Thought Process: {thought_snippet[:200]}...")
+
             model_trace.response_preview = resp_snippet
 
             trace = self.report.agent_traces.get(agent_name)
             if trace:
                 trace.model_calls.append(model_trace)
+                if thought_snippet and thought_snippet not in trace.thinking_traces:
+                    trace.thinking_traces.append(thought_snippet)
             self.report.total_model_calls += 1
 
         return None
+
+    def record_thought(self, agent_name: str, thought_text: str) -> None:
+        """Records a real-time streamed thought chunk for an agent."""
+        if not thought_text or not thought_text.strip():
+            return
+        clean = thought_text.strip()
+        trace = self.report.agent_traces.get(agent_name)
+        if not trace:
+            trace = AgentExecutionTrace(agent_name=agent_name, status="running", start_time=time.time())
+            self.report.agent_traces[agent_name] = trace
+
+        if clean not in trace.thinking_traces:
+            trace.thinking_traces.append(clean)
+        logger.info(f"[ADK Live Thought] 💭 [{agent_name}]: {clean[:150]}...")
 
     # -----------------------------------------------------------------
     # Tool Callbacks & Constraint Guardrail

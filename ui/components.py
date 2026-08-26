@@ -1,7 +1,7 @@
 """
 UI Components for the Streamlit News Intelligence Console.
-Renders the split-screen Multi-Agent Workspace (with live streaming LLM results and Parallel Search API payloads),
-Final Brief with clickable links, On-Screen LLM Output Viewer, and Stepper badges.
+Renders the split-screen Multi-Agent Workspace (with live streaming LLM results, Gemini thinking traces,
+and Parallel Search API payloads), Final Brief with clickable links, On-Screen LLM Output Viewer, and Stepper badges.
 """
 
 import json
@@ -22,7 +22,7 @@ def render_header():
         """
         <div class="main-header">
             <h1>🌐 Real-Time News Intelligence & Scenario Analysis</h1>
-            <p>Autonomous 5-agent ADK pipeline with live telemetry, single-search budget constraint per agent, and source-grounded scenario synthesis.</p>
+            <p>Autonomous 5-agent ADK pipeline with live telemetry, single-search budget constraint per agent, Gemini thinking traces, and source-grounded scenario synthesis.</p>
         </div>
         """,
         unsafe_allow_html=True,
@@ -171,6 +171,7 @@ def render_agent_live_activity(
     - Active status & duration
     - Selected search tool & arguments
     - Exact Parallel Search API return payload (queries, excerpts, links)
+    - Gemini thinking traces & reasoning thought tokens
     - LLM-generated results, findings summaries, dates, and metrics
     - Model call previews
     """
@@ -209,7 +210,16 @@ def render_agent_live_activity(
                     # Render Parallel Search API results for this tool call
                     _render_parallel_tool_result(tc)
 
-            # 2. Show LLM Results & Generated Findings
+            # 2. Show Gemini Thinking Process & Reasoning Traces
+            agent_thoughts = getattr(trace, "thinking_traces", None) if trace else None
+            if trace and agent_thoughts:
+                st.markdown("---")
+                st.markdown("💭 **Gemini Thinking Traces & Reasoning:**")
+                for idx, thought_block in enumerate(agent_thoughts, 1):
+                    with st.popover(f"🧠 View Thinking Trace #{idx} ({len(thought_block.split())} words)"):
+                        st.markdown(thought_block)
+
+            # 3. Show LLM Results & Generated Findings
             if agent_data:
                 st.markdown("---")
                 st.markdown("**🧠 LLM Output & Findings:**")
@@ -282,12 +292,18 @@ def render_agent_live_activity(
                     st.markdown(f"- 🎯 **Grounded Inquiries Generated:** `{len(inqs)}` standalone questions across 8 archetypes")
                     st.caption("Rendered markdown report displayed in the right panel.")
 
-            # 3. Model LLM Invocations preview
+            # 4. Model LLM Invocations preview
             if trace and trace.model_calls:
                 st.caption(f"🤖 LLM Calls: {len(trace.model_calls)} invocation(s)")
                 for mc in trace.model_calls:
-                    if mc.response_preview:
-                        with st.popover(f"View Model Response Snippet ({mc.model} • {mc.duration_ms}ms)"):
+                    btn_label = f"View Model Invocations ({mc.model} • {mc.duration_ms}ms)"
+                    with st.popover(btn_label):
+                        mc_thought = getattr(mc, "thinking_trace", None)
+                        if mc_thought:
+                            st.markdown("💭 **Reasoning Thoughts:**")
+                            st.info(mc_thought)
+                        if mc.response_preview:
+                            st.markdown("📄 **Output Preview:**")
                             st.code(mc.response_preview, language="json")
 
             # Fallback status text
@@ -352,11 +368,23 @@ def render_observability_drawer(report: Optional[PipelineObservabilityReport], k
 
 def render_onscreen_code_view(report: IntelligenceReport, **kwargs: Any):
     """
-    Displays the raw on-screen LLM output and structured JSON directly on screen.
+    Displays the raw on-screen LLM output, structured JSON, and Gemini thinking traces directly on screen.
     """
     with st.expander("🔍 Raw On-Screen LLM Output & Structured Data", expanded=False):
-        tab_md, tab_json = st.tabs(["📝 Raw Markdown Output", "📦 Structured Pydantic JSON"])
+        tab_md, tab_json, tab_thoughts = st.tabs(["📝 Raw Markdown Output", "📦 Structured Pydantic JSON", "💭 Gemini Thinking Traces"])
         with tab_md:
             st.code(report.formatted_markdown, language="markdown")
         with tab_json:
             st.json(report.model_dump(), expanded=False)
+        with tab_thoughts:
+            has_thoughts = False
+            if report.observability_report and report.observability_report.agent_traces:
+                for agent_name, a_trace in report.observability_report.agent_traces.items():
+                    all_thoughts = getattr(a_trace, "thinking_traces", None) or []
+                    if all_thoughts:
+                        has_thoughts = True
+                        st.markdown(f"#### 🧠 Agent: `{agent_name}`")
+                        for idx, t_text in enumerate(all_thoughts, 1):
+                            st.info(f"**Thinking Step #{idx}:**\n\n{t_text}")
+            if not has_thoughts:
+                st.caption("No thinking traces recorded. (Check that thinking level is not set to 'disabled').")

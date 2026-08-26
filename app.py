@@ -373,13 +373,19 @@ async def run_adk_pipeline(
                 current_agent_key = new_key
                 statuses[current_agent_key] = "running"
 
-        # Check for tool call events
+        # Check for tool call events and streamed thought traces
         if event.content and event.content.parts:
             for p in event.content.parts:
                 fn_call = getattr(p, "function_call", None)
                 if fn_call:
                     tool_name = fn_call.name
                     status_box.info(f"⚡ **[{author}]** Invoking Search Tool: `{tool_name}` (Budget: 1 call)...")
+
+                is_thought = getattr(p, "thought", False) is True
+                p_text = getattr(p, "text", "") or ""
+                if is_thought and p_text and author:
+                    tracker.record_thought(author, p_text)
+                    status_box.info(f"💭 **[{author}] Reasoning Trace:** {p_text[:140]}...")
 
         # Fetch current state to stream completed results immediately
         try:

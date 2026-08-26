@@ -235,6 +235,18 @@ class TestObservabilityTracker(unittest.TestCase):
         res_internal = guardrail(tool=internal_tool, args={"response": {}}, tool_context=mock_ctx)
         self.assertIsNone(res_internal)
 
+    def test_thinking_trace_recording(self):
+        """Verifies that thinking traces are properly captured in ModelCallTrace and AgentExecutionTrace."""
+        tracker = ObservabilityTracker(topic="Thinking Test")
+        tracker.record_thought("Safety_Triage_Agent", "I need to evaluate this query against sub judice red lines.")
+        tracker.record_thought("Safety_Triage_Agent", "The topic is pure regulatory policy and is safe to analyze.")
+
+        report = tracker.finalize(is_successful=True)
+        self.assertIn("Safety_Triage_Agent", report.agent_traces)
+        agent_trace = report.agent_traces["Safety_Triage_Agent"]
+        self.assertEqual(len(agent_trace.thinking_traces), 2)
+        self.assertIn("sub judice red lines", agent_trace.thinking_traces[0])
+
 
 class TestPydanticSchemas(unittest.TestCase):
     """Verifies serialization and validation of domain models."""
