@@ -22,13 +22,15 @@ def format_report_markdown(
     baseline: BaselineBrief,
     inquiries: List[SpeculativeInquiry],
     executive_summary: Optional[str] = None,
+    top_headlines: Optional[List[str]] = None,
     safety_notice: Optional[str] = None,
     is_full_suppression: bool = False,
     citations: Optional[List[Dict[str, Any]]] = None,
 ) -> str:
     """
-    Helper to render exact markdown format with executive summary, standalone inquiries,
-    grounded scenario answers with embedded inline citations, and verified references.
+    Helper to render exact markdown format with executive summary, top headlines,
+    baseline brief, standalone inquiries, grounded scenario answers with embedded inline citations,
+    and verified references.
     """
     lines = []
 
@@ -45,7 +47,37 @@ def format_report_markdown(
             "",
         ])
 
-    # 2. Baseline Intelligence Brief
+    # 2. Top Breaking Headlines
+    headlines = top_headlines or getattr(baseline, "top_headlines", None)
+    if headlines:
+        lines.extend([
+            "### 📰 Top Breaking Headlines",
+            *[f"* {h.lstrip('* ')}" for h in headlines],
+            "",
+            "---",
+            "",
+        ])
+    elif citations:
+        seen_hl_urls = set()
+        hl_items = []
+        for c in citations[:4]:
+            u = c.get("url")
+            t = c.get("title")
+            p = c.get("source_domain") or "Verified Source"
+            d = f" ({c.get('publish_date')})" if c.get("publish_date") else ""
+            if u and u not in seen_hl_urls and t:
+                seen_hl_urls.add(u)
+                hl_items.append(f"* [{t}]({u}) — *{p}{d}*")
+        if hl_items:
+            lines.extend([
+                "### 📰 Top Breaking Headlines",
+                *hl_items,
+                "",
+                "---",
+                "",
+            ])
+
+    # 3. Baseline Intelligence Brief
     date_str = f" ({baseline.core_event_date})" if baseline.core_event_date else ""
     lines.extend([
         "### Baseline Intelligence Brief",

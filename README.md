@@ -199,7 +199,7 @@ The Slack Bot runs in **Socket Mode** (`AsyncSocketModeHandler`), establishing a
 #### Step 4.3: Install to Workspace & Get `SLACK_BOT_TOKEN` (`xoxb-...`)
 1. In the left sidebar, navigate to **Features $\rightarrow$ OAuth & Permissions**.
 2. Scroll to the top and click **Install to Workspace** (or **Reinstall to Workspace**).
-3. Authorize the requested permissions (`chat:write`, `chat:write.public`, `app_mentions:read`, `commands`, `im:history`, `im:read`, `im:write`, `channels:join`, `channels:read`).
+3. Authorize the requested permissions (`chat:write`, `chat:write.public`, `app_mentions:read`, `commands`, `im:history`, `im:read`, `im:write`, `channels:join`, `channels:read`, `canvases:write`, `canvases:read`).
 4. Copy the **Bot User OAuth Token** starting with `xoxb-...`.
 5. Paste it into `.env` as `SLACK_BOT_TOKEN`.
 

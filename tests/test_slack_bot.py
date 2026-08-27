@@ -18,10 +18,12 @@ from schemas.models import (
     SuppressionStatus,
 )
 from slack_ui import (
+    build_executive_report_blocks,
     build_progress_blocks,
     build_report_blocks,
     build_safety_suppression_blocks,
     build_telemetry_modal,
+    build_thread_deepdive_blocks,
     convert_markdown_to_slack_mrkdwn,
     format_slack_url,
     split_markdown_into_slack_blocks,
@@ -143,21 +145,31 @@ class TestSlackBotUI(unittest.TestCase):
             execution_time_seconds=14.2,
         )
 
-        blocks = build_report_blocks(report, report_id="rep_test_12345")
-        self.assertIsInstance(blocks, list)
-        self.assertGreaterEqual(len(blocks), 4)
+        report.top_headlines = ["[TSMC begins mass tool installation](https://reuters.com/tsmc) — Reuters (2026-08-24)"]
 
-        # Verify Header
-        self.assertEqual(blocks[0]["type"], "header")
-        self.assertIn("TSMC 2nm Fab Expansion", blocks[0]["text"]["text"])
+        # 1. Test Executive Blocks (Main message)
+        exec_blocks = build_executive_report_blocks(report, report_id="rep_test_12345")
+        self.assertIsInstance(exec_blocks, list)
+        self.assertGreaterEqual(len(exec_blocks), 4)
+        self.assertEqual(exec_blocks[0]["type"], "header")
+        self.assertIn("TSMC 2nm Fab Expansion", exec_blocks[0]["text"]["text"])
 
-        # Verify Actions Block
-        actions_block = [b for b in blocks if b["type"] == "actions"][0]
-        action_ids = [el["action_id"] for el in actions_block["elements"]]
-        self.assertIn("slack_action_save_report", action_ids)
-        self.assertIn("slack_action_view_telemetry", action_ids)
-        self.assertIn("slack_action_feedback_positive", action_ids)
-        self.assertIn("slack_action_feedback_negative", action_ids)
+        exec_combined = "\n".join([b["text"]["text"] for b in exec_blocks if b.get("text") and isinstance(b["text"], dict)])
+        self.assertIn("TSMC is accelerating 2nm wafer fabrication", exec_combined)
+        self.assertIn("TOP BREAKING HEADLINES", exec_combined)
+        self.assertIn("BASELINE VERIFIED FACTS", exec_combined)
+
+        # 2. Test Thread Deep-Dive Blocks
+        thread_blocks = build_thread_deepdive_blocks(report)
+        self.assertIsInstance(thread_blocks, list)
+        self.assertGreaterEqual(len(thread_blocks), 3)
+        self.assertEqual(thread_blocks[0]["type"], "header")
+        self.assertIn("Speculative Scenarios", thread_blocks[0]["text"]["text"])
+
+        thread_combined = "\n".join([b["text"]["text"] for b in thread_blocks if b.get("text") and isinstance(b["text"], dict)])
+        self.assertIn("Will packaging bottlenecks constrain output", thread_combined)
+        self.assertIn("Advanced packaging lines at Kaohsiung", thread_combined)
+        self.assertIn("VERIFIED PRIMARY SOURCE REFERENCES", thread_combined)
 
     def test_build_telemetry_modal(self):
         report = IntelligenceReport(

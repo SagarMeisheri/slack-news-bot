@@ -56,10 +56,12 @@ from schemas.models import (
     SynthesisOutput,
 )
 from slack_ui import (
+    build_executive_report_blocks,
     build_progress_blocks,
     build_report_blocks,
     build_safety_suppression_blocks,
     build_telemetry_modal,
+    build_thread_deepdive_blocks,
 )
 from storage import save_report
 from tools.search_tool import consolidate_citations
@@ -76,8 +78,13 @@ logger = logging.getLogger("slack_news_bot")
 # In-memory cache for recent reports by report_id (allows interactive buttons to access data)
 REPORTS_CACHE: Dict[str, IntelligenceReport] = {}
 
-# Agent Name to stage key mapping
+# Agent Name to stage key mapping (supports exact ADK agent names and aliases)
 AGENT_MAP = {
+    "Safety_Triage_Agent": "safety",
+    "Breaking_Fallout_Investigator": "breaking",
+    "Precedent_Counter_Investigator": "precedent",
+    "Calendar_Filings_Investigator": "calendar",
+    "Synthesis_Neutrality_Auditor": "synthesis",
     "SafetyAgent": "safety",
     "BreakingInvestigator": "breaking",
     "PrecedentInvestigator": "precedent",
@@ -181,17 +188,20 @@ def _reconstruct_report_from_state(
     baseline_brief = None
     inquiries: list[SpeculativeInquiry] = []
     exec_summary = None
+    top_headlines = []
     formatted_md = ""
 
     if raw_synthesis:
         try:
             synth_obj = SynthesisOutput.model_validate(raw_synthesis)
             exec_summary = synth_obj.executive_summary
+            top_headlines = synth_obj.top_headlines
             baseline_brief = synth_obj.baseline_brief
             inquiries = synth_obj.inquiries
             formatted_md = synth_obj.formatted_markdown or ""
         except Exception:
             exec_summary = raw_synthesis.get("executive_summary")
+            top_headlines = raw_synthesis.get("top_headlines", [])
             raw_bb = raw_synthesis.get("baseline_brief", {})
             if raw_bb:
                 baseline_brief = BaselineBrief(
@@ -200,6 +210,7 @@ def _reconstruct_report_from_state(
                     immediate_fallout=raw_bb.get("immediate_fallout", ""),
                     context_precedent=raw_bb.get("context_precedent", ""),
                     evidence_note=raw_bb.get("evidence_note"),
+                    top_headlines=raw_bb.get("top_headlines", []),
                 )
             raw_inqs = raw_synthesis.get("inquiries", [])
             for item in raw_inqs:
@@ -215,6 +226,7 @@ def _reconstruct_report_from_state(
             core_event_date=raw_stages_1_2.get("core_event_date"),
             immediate_fallout=raw_stages_1_2.get("stage2_summary", "Market and institutional reactions analyzed."),
             context_precedent=raw_stages_3_5.get("stage3_precedent_summary", "Historical regulatory context documented."),
+            top_headlines=top_headlines,
         )
 
     # If formatted markdown wasn't generated directly, format it now
@@ -223,6 +235,7 @@ def _reconstruct_report_from_state(
             baseline=baseline_brief,
             inquiries=inquiries,
             executive_summary=exec_summary,
+            top_headlines=top_headlines,
             safety_notice=safety_res.safety_notice,
             citations=all_citations,
         )
@@ -231,6 +244,7 @@ def _reconstruct_report_from_state(
         query_topic=topic,
         jurisdiction=jurisdiction_str,
         executive_summary=exec_summary,
+        top_headlines=top_headlines,
         safety_result=safety_res,
         search_stages=reconstructed_stages,
         baseline_brief=baseline_brief,
@@ -240,6 +254,53 @@ def _reconstruct_report_from_state(
         execution_time_seconds=execution_time,
         observability_report=tracker.report,
     )
+
+
+async def create_slack_canvas(
+    client,
+    topic: str,
+    markdown_content: str,
+    channel_id: str,
+) -> Optional[str]:
+    """
+    Creates a standalone Slack Canvas containing the full unconstrained Markdown report,
+    and grants read-access to the channel members.
+    Returns canvas_id on success, or None on failure/missing scopes.
+    """
+    if not markdown_content or not markdown_content.strip():
+        return None
+
+    try:
+        title = f"Intelligence Brief: {topic[:60]}"
+        res = await client.canvases_create(
+            title=title,
+            document_content={
+                "type": "markdown",
+                "markdown": markdown_content.strip(),
+            },
+        )
+        if not res or not res.get("ok"):
+            logger.warning(f"Slack Canvas creation returned non-ok: {res}")
+            return None
+
+        canvas_id = res.get("canvas_id")
+        logger.info(f"Successfully created Slack Canvas: {canvas_id} for topic: {topic}")
+
+        # Grant read access to the channel
+        if canvas_id and channel_id and not channel_id.startswith("D"):
+            try:
+                await client.canvases_access_set(
+                    canvas_id=canvas_id,
+                    access_level="read",
+                    channel_ids=[channel_id],
+                )
+            except Exception as e:
+                logger.debug(f"Note: Could not explicitly set canvas channel permissions: {e}")
+
+        return canvas_id
+    except Exception as e:
+        logger.warning(f"Slack Canvas creation skipped (verify 'canvases:write' scope): {e}")
+        return None
 
 
 async def execute_adk_pipeline_for_slack(
@@ -382,7 +443,7 @@ async def execute_adk_pipeline_for_slack(
             ],
         )
 
-        current_agent_key = None
+        current_agent_key = "safety"
         last_known_state: Dict[str, Any] = {}
 
         # Stream ADK Events
@@ -392,14 +453,22 @@ async def execute_adk_pipeline_for_slack(
             new_message=user_msg,
         ):
             author = getattr(event, "author", None)
-            if author and author in AGENT_MAP:
-                new_key = AGENT_MAP[author]
-                if new_key != current_agent_key:
+            if author:
+                # Find matching stage key
+                matched_key = AGENT_MAP.get(author)
+                if not matched_key:
+                    for k_name, s_key in AGENT_MAP.items():
+                        if k_name.lower() in author.lower() or s_key in author.lower():
+                            matched_key = s_key
+                            break
+
+                if matched_key and matched_key != current_agent_key:
                     if current_agent_key:
                         statuses[current_agent_key] = "completed"
-                    current_agent_key = new_key
+                    current_agent_key = matched_key
                     statuses[current_agent_key] = "running"
-                    await update_slack_progress(f"Agent [{author}] active...", force=True)
+                    clean_author_name = author.replace("_", " ")
+                    await update_slack_progress(f"▶ Agent [{clean_author_name}] running...", force=True)
 
             # Check for tool call events and streamed thought traces
             if event.content and event.content.parts:
@@ -407,13 +476,14 @@ async def execute_adk_pipeline_for_slack(
                     fn_call = getattr(p, "function_call", None)
                     if fn_call:
                         tool_name = fn_call.name
-                        await update_slack_progress(f"[{author}] Invoking Tool: {tool_name}")
+                        clean_tool = tool_name.replace("search_stage_", "Stage ").replace("_", " ")
+                        await update_slack_progress(f"⚡ Search: {clean_tool}", force=True)
 
                     is_thought = getattr(p, "thought", False) is True
                     p_text = getattr(p, "text", "") or ""
                     if is_thought and p_text and author:
                         tracker.record_thought(author, p_text)
-                        await update_slack_progress(f"[{author}] Reasoning: {p_text[:80]}...")
+                        await update_slack_progress(f"🧠 [{author.replace('_', ' ')}] Analyzing evidence...", force=False)
 
             # Capture latest state
             try:
@@ -468,15 +538,25 @@ async def execute_adk_pipeline_for_slack(
         report_id = save_report(report) or f"rep_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"
         REPORTS_CACHE[report_id] = report
 
-        # Render final Block Kit Briefing
-        report_blocks = build_report_blocks(report, report_id)
+        # 1. Update main progress message in channel with clean, un-collapsed Executive Briefing & Top Headlines
+        exec_blocks = build_executive_report_blocks(report, report_id)
         await client.chat_update(
             channel=target_channel,
             ts=msg_ts,
             text=f"🌐 Intelligence Brief: {topic}",
-            blocks=report_blocks,
+            blocks=exec_blocks,
         )
-        logger.info(f"Successfully posted Slack briefing for topic: {topic} (Report ID: {report_id})")
+
+        # 2. Automatically post the 10-20 Scenario Projections & Answers with Sources in the thread
+        thread_target_ts = thread_ts or msg_ts
+        thread_blocks = build_thread_deepdive_blocks(report)
+        await client.chat_postMessage(
+            channel=target_channel,
+            thread_ts=thread_target_ts,
+            text=f"🔮 Scenario Analysis & Grounded Inquiries: {topic}",
+            blocks=thread_blocks,
+        )
+        logger.info(f"Successfully posted Slack executive briefing & thread deep-dive for topic: {topic} (Report ID: {report_id})")
 
     except Exception as e:
         logger.exception(f"Error during Slack ADK execution: {e}")
@@ -692,6 +772,12 @@ async def handle_feedback_negative(ack, body: Dict[str, Any], client):
         thread_ts=message_ts,
         text=f"👎 Feedback recorded from <@{user_id}>. Future research will adjust search weights.",
     )
+
+
+@app.action("slack_action_open_canvas")
+async def handle_open_canvas_action(ack, body: Dict[str, Any], client):
+    """Acknowledges canvas link clicks."""
+    await ack()
 
 
 # ---------------------------------------------------------

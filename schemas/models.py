@@ -133,6 +133,10 @@ class BaselineBrief(BaseModel):
         default=None,
         description="Flag any stage with insufficient data or source conflict per Section 4",
     )
+    top_headlines: List[str] = Field(
+        default_factory=list,
+        description="Top 3-5 verified breaking headlines with markdown source links",
+    )
 
 
 class InquiryArchetype(str, Enum):
@@ -168,6 +172,10 @@ class SynthesisOutput(BaseModel):
     executive_summary: Optional[str] = Field(
         default=None,
         description="1-paragraph high-level strategic takeaway / executive TL;DR",
+    )
+    top_headlines: List[str] = Field(
+        default_factory=list,
+        description="Top 3-5 breaking headlines with markdown links [Headline](URL)",
     )
     baseline_brief: BaselineBrief = Field(..., description="Crisp date-grounded baseline intelligence brief")
     inquiries: List[SpeculativeInquiry] = Field(default_factory=list, description="10-20 grounded speculative inquiries with answers")
@@ -242,6 +250,10 @@ class IntelligenceReport(BaseModel):
     executive_summary: Optional[str] = Field(
         default=None,
         description="Executive TL;DR & high-level strategic takeaway",
+    )
+    top_headlines: List[str] = Field(
+        default_factory=list,
+        description="Top 3-5 verified breaking headlines with markdown links",
     )
     safety_result: SafetyCheckResult = Field(..., description="Safety and suppression audit result")
     search_stages: List[SearchStageResult] = Field(default_factory=list, description="All 7 search stage outputs")

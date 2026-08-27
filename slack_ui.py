@@ -1,7 +1,7 @@
 """
 Slack UI Block Kit Formatter for ADK News Intelligence.
-Generates dynamic progress indicators, rich structured briefing blocks,
-adaptive markdown formatting with inline links, interactive action buttons, and telemetry modals.
+Generates dynamic progress indicators, crisp un-collapsed executive briefings,
+threaded deep-dive scenario analyses, interactive action buttons, and telemetry modals.
 """
 
 import re
@@ -80,10 +80,10 @@ def convert_markdown_to_slack_mrkdwn(text: str) -> str:
     return converted
 
 
-def split_markdown_into_slack_blocks(mrkdwn_text: str, max_chunk_len: int = 2700) -> List[Dict[str, Any]]:
+def split_markdown_into_slack_blocks(mrkdwn_text: str, max_chunk_len: int = 1500) -> List[Dict[str, Any]]:
     """
     Splits converted mrkdwn text into structured Slack section blocks,
-    respecting Slack's 3,000 character limit per block.
+    setting expand: True to prevent Slack's 'See more' collapse.
     """
     blocks: List[Dict[str, Any]] = []
     paragraphs = mrkdwn_text.split("\n\n")
@@ -98,6 +98,7 @@ def split_markdown_into_slack_blocks(mrkdwn_text: str, max_chunk_len: int = 2700
             if current_chunk:
                 blocks.append({
                     "type": "section",
+                    "expand": True,
                     "text": {"type": "mrkdwn", "text": current_chunk},
                 })
                 current_chunk = ""
@@ -108,15 +109,16 @@ def split_markdown_into_slack_blocks(mrkdwn_text: str, max_chunk_len: int = 2700
             if current_chunk:
                 blocks.append({
                     "type": "section",
+                    "expand": True,
                     "text": {"type": "mrkdwn", "text": current_chunk},
                 })
                 current_chunk = ""
 
-            # If an individual paragraph exceeds max chunk length, split it
             while len(p_str) > max_chunk_len:
                 sub_part = p_str[:max_chunk_len]
                 blocks.append({
                     "type": "section",
+                    "expand": True,
                     "text": {"type": "mrkdwn", "text": sub_part},
                 })
                 p_str = p_str[max_chunk_len:]
@@ -130,6 +132,7 @@ def split_markdown_into_slack_blocks(mrkdwn_text: str, max_chunk_len: int = 2700
     if current_chunk:
         blocks.append({
             "type": "section",
+            "expand": True,
             "text": {"type": "mrkdwn", "text": current_chunk},
         })
 
@@ -176,6 +179,7 @@ def build_progress_blocks(
         },
         {
             "type": "section",
+            "expand": True,
             "text": {
                 "type": "mrkdwn",
                 "text": f"*Topic:* `{topic[:150]}`\n\n*Pipeline Stage Progress:*\n{progress_text}",
@@ -215,6 +219,7 @@ def build_safety_suppression_blocks(
         },
         {
             "type": "section",
+            "expand": True,
             "text": {
                 "type": "mrkdwn",
                 "text": (
@@ -237,13 +242,13 @@ def build_safety_suppression_blocks(
     ]
 
 
-def build_report_blocks(
+def build_executive_report_blocks(
     report: IntelligenceReport,
     report_id: str = "",
 ) -> List[Dict[str, Any]]:
     """
-    Constructs the final rich Block Kit briefing for Slack from the full synthesized markdown,
-    incorporating Executive TL;DR, answers with inline citations, verified references, and action buttons.
+    Constructs a clean, punchy Executive Intelligence Brief for the main Slack channel message.
+    Configured with expand: True and bite-sized blocks to eliminate Slack's 'See more' collapse.
     """
     blocks: List[Dict[str, Any]] = []
 
@@ -263,6 +268,7 @@ def build_report_blocks(
         cats = ", ".join([c.value for c in report.safety_result.categories_triggered])
         blocks.append({
             "type": "section",
+            "expand": True,
             "text": {
                 "type": "mrkdwn",
                 "text": f"⚠️ *Editorial Notice (Partial Clearance):* {cats}\n_{report.safety_result.rationale}_",
@@ -270,88 +276,77 @@ def build_report_blocks(
         })
         blocks.append({"type": "divider"})
 
-    # 3. Render Synthesized Markdown Content
-    markdown_content = report.formatted_markdown or ""
+    # 3. Executive Summary & Strategic Takeaway
+    exec_summary = report.executive_summary
+    if not exec_summary and report.baseline_brief:
+        exec_summary = report.baseline_brief.core_event
 
-    # If formatted_markdown is present, convert and chunk it directly
-    if markdown_content:
-        converted_mrkdwn = convert_markdown_to_slack_mrkdwn(markdown_content)
-        content_blocks = split_markdown_into_slack_blocks(converted_mrkdwn, max_chunk_len=2700)
-        # Limit content blocks to prevent hitting Slack's 50 block cap (reserve 5 for header/footer/actions)
-        blocks.extend(content_blocks[:42])
-    else:
-        # Fallback manual reconstruction if formatted_markdown is empty
-        if report.executive_summary:
-            blocks.append({
-                "type": "section",
-                "text": {
-                    "type": "mrkdwn",
-                    "text": f"⚡ *EXECUTIVE TL;DR*\n\n{truncate_mrkdwn(report.executive_summary, 2700)}",
-                },
-            })
-            blocks.append({"type": "divider"})
+    if exec_summary:
+        blocks.append({
+            "type": "section",
+            "expand": True,
+            "text": {
+                "type": "mrkdwn",
+                "text": f"⚡ *EXECUTIVE TL;DR & STRATEGIC TAKEAWAY*\n{truncate_mrkdwn(convert_markdown_to_slack_mrkdwn(exec_summary), 1500)}",
+            },
+        })
+        blocks.append({"type": "divider"})
 
-        if report.baseline_brief:
-            brief = report.baseline_brief
-            date_str = f" *[{brief.core_event_date}]*" if brief.core_event_date else ""
-            baseline_md = (
-                f"📌 *Core Event{date_str}:*\n{brief.core_event}\n\n"
-                f"💥 *Immediate Fallout:*\n{brief.immediate_fallout}\n\n"
-                f"🏛️ *Context & Precedent:*\n{brief.context_precedent}"
-            )
-            if brief.evidence_note:
-                baseline_md += f"\n\n🔍 *Evidence Note:* _{brief.evidence_note}_"
+    # 4. Top Breaking Headlines
+    headlines_text = ""
+    if report.top_headlines:
+        hl_lines = [f"• {convert_markdown_to_slack_mrkdwn(h.lstrip('* '))}" for h in report.top_headlines[:4]]
+        headlines_text = "\n".join(hl_lines)
+    elif report.citations_all:
+        hl_lines = []
+        for idx, c in enumerate(report.citations_all[:4], start=1):
+            url = c.get("url", "")
+            title = c.get("title") or c.get("source_domain") or f"Breaking Source {idx}"
+            domain = c.get("source_domain") or "News Source"
+            date_str = f" ({c.get('publish_date')})" if c.get("publish_date") else ""
+            if url:
+                hl_lines.append(f"• {format_slack_url(url, title[:70])} — _{domain}{date_str}_")
+            else:
+                hl_lines.append(f"• *{title[:70]}* — _{domain}{date_str}_")
+        headlines_text = "\n".join(hl_lines)
 
-            blocks.append({
-                "type": "section",
-                "text": {
-                    "type": "mrkdwn",
-                    "text": f"📋 *BASELINE VERIFIED FACTS*\n\n{truncate_mrkdwn(baseline_md, 2700)}",
-                },
-            })
-            blocks.append({"type": "divider"})
+    if headlines_text:
+        blocks.append({
+            "type": "section",
+            "expand": True,
+            "text": {
+                "type": "mrkdwn",
+                "text": f"📰 *TOP BREAKING HEADLINES*\n{headlines_text}",
+            },
+        })
+        blocks.append({"type": "divider"})
 
-        if report.inquiries:
-            inquiry_lines = []
-            for idx, inq in enumerate(report.inquiries[:10], start=1):
-                arch_val = inq.archetype.value if hasattr(inq.archetype, "value") else str(inq.archetype)
-                ans_str = f"\n  ↳ *Analysis:* {inq.answer}" if inq.answer else ""
-                inquiry_lines.append(f"*{idx}. {arch_val}*\n• *Inquiry:* {inq.question}{ans_str}")
+    # 5. Baseline Verified Facts
+    if report.baseline_brief:
+        brief = report.baseline_brief
+        date_str = f" *[{brief.core_event_date}]*" if brief.core_event_date else ""
+        baseline_md = (
+            f"📌 *Core Event{date_str}:*\n{convert_markdown_to_slack_mrkdwn(brief.core_event)}\n\n"
+            f"💥 *Immediate Fallout:*\n{convert_markdown_to_slack_mrkdwn(brief.immediate_fallout)}\n\n"
+            f"🏛️ *Context & Precedent:*\n{convert_markdown_to_slack_mrkdwn(brief.context_precedent)}"
+        )
+        if brief.evidence_note:
+            baseline_md += f"\n\n🔍 *Evidence Note:* _{brief.evidence_note}_"
 
-            inquiries_md = "\n\n".join(inquiry_lines)
-            blocks.append({
-                "type": "section",
-                "text": {
-                    "type": "mrkdwn",
-                    "text": f"🔮 *SCENARIOS & GROUNDED ANSWERS*\n\n{truncate_mrkdwn(inquiries_md, 2700)}",
-                },
-            })
-            blocks.append({"type": "divider"})
+        blocks.append({
+            "type": "section",
+            "expand": True,
+            "text": {
+                "type": "mrkdwn",
+                "text": f"📋 *BASELINE VERIFIED FACTS*\n{truncate_mrkdwn(baseline_md, 2000)}",
+            },
+        })
+        blocks.append({"type": "divider"})
 
-        if report.citations_all:
-            citation_links = []
-            for idx, c in enumerate(report.citations_all[:8], start=1):
-                url = c.get("url", "")
-                title = c.get("title") or c.get("source_domain") or f"Source {idx}"
-                if url:
-                    citation_links.append(f"[{idx}] {format_slack_url(url, title[:50])}")
-                else:
-                    citation_links.append(f"[{idx}] {title[:50]}")
-
-            cit_text = " • ".join(citation_links)
-            blocks.append({
-                "type": "section",
-                "text": {
-                    "type": "mrkdwn",
-                    "text": f"📚 *Primary Sources & Citations:*\n{truncate_mrkdwn(cit_text, 2500)}",
-                },
-            })
-
-    blocks.append({"type": "divider"})
-
-    # 4. Metadata Footer
+    # 6. Metadata Footer
     time_taken = f"{report.execution_time_seconds:.1f}s" if report.execution_time_seconds else "N/A"
     total_stages = len(report.search_stages)
+    inquiry_count = len(report.inquiries) or 8
     blocks.append({
         "type": "context",
         "elements": [
@@ -360,14 +355,14 @@ def build_report_blocks(
                 "text": (
                     f"⏱️ *Latency:* {time_taken} | "
                     f"🔎 *Search Stages:* {total_stages}/7 | "
-                    f"⚖️ *Jurisdiction:* {report.jurisdiction} | "
-                    f"🤖 *ADK Multi-Agent Pipeline*"
+                    f"⚖️ *Jurisdiction:* {report.jurisdiction}\n"
+                    f"💬 *⬇️ {inquiry_count} Scenario Projections & Detailed Source List posted in thread below!*"
                 ),
             }
         ],
     })
 
-    # 5. Interactive Action Buttons
+    # 7. Interactive Action Buttons
     target_id = report_id or f"rep_{report.query_topic[:20]}"
     blocks.append({
         "type": "actions",
@@ -403,6 +398,81 @@ def build_report_blocks(
     return blocks
 
 
+def build_thread_deepdive_blocks(
+    report: IntelligenceReport,
+) -> List[Dict[str, Any]]:
+    """
+    Constructs the detailed Scenario Analysis & Inquiries with Answers and Sources
+    to be posted as an automated reply in the Slack thread.
+    Each inquiry is rendered in its own un-collapsed section block with expand: True.
+    """
+    blocks: List[Dict[str, Any]] = [
+        {
+            "type": "header",
+            "text": {
+                "type": "plain_text",
+                "text": "🔮 Speculative Scenarios & Strategic Answers",
+                "emoji": True,
+            },
+        },
+        {"type": "divider"},
+    ]
+
+    # Inquiries with Synthesized Answers (Individual Bite-Sized Expanded Blocks)
+    if report.inquiries:
+        # Cap at 15 inquiries to stay well within Slack's 50-block cap
+        for idx, inq in enumerate(report.inquiries[:15], start=1):
+            arch_val = inq.archetype.value if hasattr(inq.archetype, "value") else str(inq.archetype)
+            q_text = convert_markdown_to_slack_mrkdwn(inq.question)
+            ans_text = convert_markdown_to_slack_mrkdwn(inq.answer) if inq.answer else "Synthesized scenario projection grounded in search precedents."
+            
+            blocks.append({
+                "type": "section",
+                "expand": True,
+                "text": {
+                    "type": "mrkdwn",
+                    "text": f"*{idx}. {arch_val}*\n• *Inquiry:* {q_text}\n  ↳ *Scenario Projection:* {ans_text}",
+                },
+            })
+
+        blocks.append({"type": "divider"})
+
+    # Complete Citations List
+    if report.citations_all:
+        cit_lines = []
+        for idx, c in enumerate(report.citations_all[:12], start=1):
+            url = c.get("url", "")
+            title = c.get("title") or c.get("source_domain") or f"Source {idx}"
+            stage = c.get("stage_name") or "Verified Search Finding"
+            pub = f" ({c.get('publish_date')})" if c.get("publish_date") else ""
+            if url:
+                cit_lines.append(f"• {format_slack_url(url, title[:70])} — _{stage}{pub}_")
+            else:
+                cit_lines.append(f"• *{title[:70]}* — _{stage}{pub}_")
+
+        blocks.append({
+            "type": "section",
+            "expand": True,
+            "text": {
+                "type": "mrkdwn",
+                "text": f"📚 *VERIFIED PRIMARY SOURCE REFERENCES ({len(report.citations_all)}):*\n\n" + truncate_mrkdwn("\n".join(cit_lines), 2500),
+            },
+        })
+
+    return blocks
+
+
+def build_report_blocks(
+    report: IntelligenceReport,
+    report_id: str = "",
+    canvas_id: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """
+    Main entry point for report blocks. Uses build_executive_report_blocks.
+    """
+    return build_executive_report_blocks(report, report_id)
+
+
 def build_telemetry_modal(
     report: IntelligenceReport,
 ) -> Dict[str, Any]:
@@ -420,6 +490,7 @@ def build_telemetry_modal(
         },
         {
             "type": "section",
+            "expand": True,
             "fields": [
                 {
                     "type": "mrkdwn",
@@ -450,6 +521,7 @@ def build_telemetry_modal(
 
         modal_blocks.append({
             "type": "section",
+            "expand": True,
             "text": {
                 "type": "mrkdwn",
                 "text": f"*🔎 Search Investigation Breakdown:*\n\n" + truncate_mrkdwn("\n\n".join(stage_lines), 2000),
@@ -470,6 +542,7 @@ def build_telemetry_modal(
 
         modal_blocks.append({
             "type": "section",
+            "expand": True,
             "text": {
                 "type": "mrkdwn",
                 "text": f"*📚 Complete Source List ({len(report.citations_all)}):*\n\n" + truncate_mrkdwn("\n".join(cit_lines), 2500),
