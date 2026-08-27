@@ -149,6 +149,10 @@ class InquiryArchetype(str, Enum):
 class SpeculativeInquiry(BaseModel):
     archetype: InquiryArchetype = Field(..., description="The inquiry archetype")
     question: str = Field(..., description="Falsifiable single-sentence inquiry probing distinct angle")
+    answer: Optional[str] = Field(
+        default=None,
+        description="2-3 sentence synthesized scenario projection/analysis with inline citations [Source](URL)",
+    )
     source_stages: List[int] = Field(..., description="Traceable search stage IDs grounding this inquiry")
     neutrality_verified: bool = Field(
         default=True,
@@ -161,8 +165,12 @@ class SpeculativeInquiry(BaseModel):
 
 
 class SynthesisOutput(BaseModel):
+    executive_summary: Optional[str] = Field(
+        default=None,
+        description="1-paragraph high-level strategic takeaway / executive TL;DR",
+    )
     baseline_brief: BaselineBrief = Field(..., description="Crisp date-grounded baseline intelligence brief")
-    inquiries: List[SpeculativeInquiry] = Field(default_factory=list, description="10-20 grounded speculative inquiries")
+    inquiries: List[SpeculativeInquiry] = Field(default_factory=list, description="10-20 grounded speculative inquiries with answers")
     formatted_markdown: str = Field(..., description="Rendered markdown output matching master_prompt.md Section 6")
 
 
@@ -231,6 +239,10 @@ class PipelineObservabilityReport(BaseModel):
 class IntelligenceReport(BaseModel):
     query_topic: str = Field(..., description="Original user topic or breaking query")
     jurisdiction: str = Field(default="India", description="Selected jurisdiction focus")
+    executive_summary: Optional[str] = Field(
+        default=None,
+        description="Executive TL;DR & high-level strategic takeaway",
+    )
     safety_result: SafetyCheckResult = Field(..., description="Safety and suppression audit result")
     search_stages: List[SearchStageResult] = Field(default_factory=list, description="All 7 search stage outputs")
     baseline_brief: Optional[BaselineBrief] = Field(default=None, description="Crisp date-grounded baseline brief")

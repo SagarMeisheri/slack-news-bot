@@ -1,8 +1,8 @@
 """
 Agent 5: Synthesis & Neutrality Auditor Agent using Google ADK.
-Synthesizes the Baseline Intelligence Brief and generates 10 to 20 Speculative & Strategic Inquiries
-across the 8 archetypes, enforcing strict neutrality checks, standalone self-contained question context,
-and clickable source links using native Parallel Search citations.
+Synthesizes the Executive TL;DR, Baseline Intelligence Brief, and generates 10 to 20 Speculative & Strategic Inquiries
+with Grounded Scenario Answers across the 8 archetypes, enforcing strict neutrality checks, standalone self-contained
+context, and dual citation coverage (inline markdown links + full verified source references).
 """
 
 from typing import Any, Dict, List, Optional
@@ -21,18 +21,31 @@ from schemas.models import (
 def format_report_markdown(
     baseline: BaselineBrief,
     inquiries: List[SpeculativeInquiry],
+    executive_summary: Optional[str] = None,
     safety_notice: Optional[str] = None,
     is_full_suppression: bool = False,
     citations: Optional[List[Dict[str, Any]]] = None,
 ) -> str:
     """
-    Helper to render exact markdown format with standalone inquiries and native Parallel Search citation links.
+    Helper to render exact markdown format with executive summary, standalone inquiries,
+    grounded scenario answers with embedded inline citations, and verified references.
     """
     lines = []
 
     if safety_notice:
         lines.append(f"> ⚠️ **{safety_notice}**\n")
 
+    # 1. Executive TL;DR & Strategic Takeaway
+    if executive_summary:
+        lines.extend([
+            "### Executive Summary & Strategic Takeaway",
+            executive_summary.strip(),
+            "",
+            "---",
+            "",
+        ])
+
+    # 2. Baseline Intelligence Brief
     date_str = f" ({baseline.core_event_date})" if baseline.core_event_date else ""
     lines.extend([
         "### Baseline Intelligence Brief",
@@ -43,6 +56,7 @@ def format_report_markdown(
     if baseline.evidence_note:
         lines.append(f"* **Evidence Note**: {baseline.evidence_note}")
 
+    # Full suppression early return with references
     if is_full_suppression:
         if citations:
             lines.extend(["", "---", "", "### 🔗 Verified Source References", ""])
@@ -136,7 +150,16 @@ def format_report_markdown(
                 else:
                     stages_str = "Verified Intelligence Source"
 
-                lines.append(f"* {q.question} *(source: {stages_str})*")
+                # Render Question + Scenario Projection/Answer with Inline Citations
+                lines.append(f"* **Inquiry**: {q.question}")
+                if q.answer:
+                    # If the answer already contains markdown link format, preserve it, else append citation link
+                    if "http" in q.answer or "[" in q.answer:
+                        lines.append(f"  **Scenario Projection**: {q.answer}")
+                    else:
+                        lines.append(f"  **Scenario Projection**: {q.answer} *(sources: {stages_str})*")
+                else:
+                    lines.append(f"  *(Grounding Source: {stages_str})*")
         lines.append("")
 
     # Add Source References Section directly with Parallel Search titles and links
@@ -171,7 +194,7 @@ def create_synthesis_agent(
 
     return LlmAgent(
         name=name,
-        description="Synthesizes the Baseline Intelligence Brief and generates 10 to 20 standalone Speculative & Strategic Inquiries.",
+        description="Synthesizes the Executive TL;DR, Baseline Brief, and generates 10 to 20 standalone Speculative Inquiries with Grounded Scenario Answers and inline citations.",
         model=cfg.model_name,
         generate_content_config=cfg.to_generate_content_config(),
         instruction=instruction,

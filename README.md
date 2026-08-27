@@ -130,64 +130,137 @@ Each generated inquiry is a single, falsifiable sentence traceable to a search s
 
 ---
 
-## 🚀 Getting Started
+## 🚀 Complete Setup & Installation Guide
 
 ### 1. Prerequisites
-* Python `>=3.10`
-* [uv](https://docs.astral.sh/uv/) package manager
+* **Python**: `>=3.10` (Python 3.11 recommended)
+* **Package Manager**: [uv](https://docs.astral.sh/uv/) (Astral's fast Python package manager)
+  ```bash
+  # Install uv (if not already installed)
+  curl -LsSf https://astral.sh/uv/install.sh | sh
+  ```
 
-### 2. Environment Setup
-Create or update your `.env` file in the root directory:
+---
 
-```bash
-# .env
-GEMINI_API_KEY=your_gemini_api_key_here
-PARALLEL_API_KEY=your_parallel_api_key_here
-```
-
-### 3. Install Dependencies
-Dependencies are managed with `uv`:
+### 2. Clone & Install Dependencies
 
 ```bash
+git clone <repo-url> spec-agents
+cd spec-agents
+
+# Sync all dependencies automatically
 uv sync
 ```
 
 ---
 
-## 🖥️ Running the Application
+### 3. Environment Variables (`.env`)
 
-Start the Streamlit split-screen application:
+Copy the example environment file and configure your API keys:
 
+```bash
+cp .env.example .env
+```
+
+Edit `.env` with your credentials:
+
+```env
+# Google Gemini API Key (https://aistudio.google.com/)
+GEMINI_API_KEY=your_gemini_api_key_here
+
+# Parallel Web Search API Key (https://parallel.ai/)
+PARALLEL_API_KEY=your_parallel_api_key_here
+
+# Slack Bolt Configuration (Socket Mode)
+SLACK_BOT_TOKEN=xoxb-your-bot-token-here
+SLACK_APP_TOKEN=xapp-your-app-token-here
+SLACK_SIGNING_SECRET=your-signing-secret-here
+```
+
+---
+
+### 4. Slack App Setup Guide (1-Click Manifest)
+
+The Slack Bot runs in **Socket Mode** (`AsyncSocketModeHandler`), establishing an outbound WebSocket connection directly to Slack's servers. **No public IP, Cloud Run deployment, or ngrok tunnel is required.**
+
+#### Step 4.1: Create App from Manifest
+1. Navigate to **[api.slack.com/apps](https://api.slack.com/apps)** and click **Create New App**.
+2. Select **From an app manifest**.
+3. Select your Slack Workspace.
+4. Copy the entire contents of [`slack_manifest.json`](file:///Users/sagarmeisheri/Apps/spec-agents/slack_manifest.json) into the JSON editor and click **Create**.
+
+#### Step 4.2: Generate `SLACK_APP_TOKEN` (`xapp-...`)
+1. In the left sidebar, navigate to **Settings $\rightarrow$ Basic Information**.
+2. Scroll down to the **App-level tokens** section and click **Generate Token and Scopes**.
+3. Set Token Name to `socket-token`, click **Add Scope**, and check **`connections:write`**.
+4. Click **Generate** and copy the token starting with `xapp-...`.
+5. Paste it into `.env` as `SLACK_APP_TOKEN`.
+
+#### Step 4.3: Install to Workspace & Get `SLACK_BOT_TOKEN` (`xoxb-...`)
+1. In the left sidebar, navigate to **Features $\rightarrow$ OAuth & Permissions**.
+2. Scroll to the top and click **Install to Workspace** (or **Reinstall to Workspace**).
+3. Authorize the requested permissions (`chat:write`, `chat:write.public`, `app_mentions:read`, `commands`, `im:history`, `im:read`, `im:write`, `channels:join`, `channels:read`).
+4. Copy the **Bot User OAuth Token** starting with `xoxb-...`.
+5. Paste it into `.env` as `SLACK_BOT_TOKEN`.
+
+#### Step 4.4: Get `SLACK_SIGNING_SECRET`
+1. In the left sidebar, click **Settings $\rightarrow$ Basic Information**.
+2. Scroll to **App Credentials** $\rightarrow$ Click **Show** next to **Signing Secret**.
+3. Paste it into `.env` as `SLACK_SIGNING_SECRET`.
+
+---
+
+## 🖥️ Running the Applications
+
+### Option A: Start the Slack Bot (Socket Mode)
+```bash
+uv run python slack_app.py
+```
+Output:
+```text
+=================================================================
+⚡ ADK News Intelligence Slack Bot running in Socket Mode...
+👂 Listening for @bot mentions, DMs, and /news commands...
+=================================================================
+⚡️ Bolt app is running!
+```
+
+#### How to Interact in Slack:
+* **Slash Command**: Type `/news <topic>` in any channel (e.g. `/news RBI draft guidelines for digital lending`).
+* **Channel Mention**: `@NewsBot Analyze TSMC Taiwan tariff impact on semiconductor supply chains`.
+* **Direct Messages (DMs)**: Open a 1-on-1 chat with **NewsBot** and send any query or breaking headline.
+* **Auto-Join**: The bot automatically joins public channels. For private channels, invite the bot once: `/invite @NewsBot`.
+
+---
+
+### Option B: Start the Streamlit Web Console
 ```bash
 uv run streamlit run app.py
 ```
-
-Open `http://localhost:8501` in your browser.
+Open **`http://localhost:8501`** in your browser to access the split-screen console with live multi-agent execution cards and telemetry explorer.
 
 ---
 
-## 🧪 Running Unit Tests
-
-Run the complete offline test suite (prompt loading, schemas, ADK tool wrapping, 1-call guardrail, formatting):
-
+### Option C: Run the Unit & Integration Test Suite
 ```bash
-uv run python -m unittest discover tests -v
+PYTHONPATH=. uv run --with pytest pytest tests/ -v
 ```
+Runs all 24 automated tests covering model configs, prompt caching, search tools, 1-call guardrails, storage, and Slack Block Kit builders.
+
 
 ---
-
-## 📂 Project Structure
 
 ```
 spec-agents/
 ├── README.md                      # Documentation & Observability guide
 ├── pyproject.toml                 # Dependencies & project metadata
-├── .env                           # API keys
-├── master_prompt.md               # Master reference prompt & institutional rules
-├── parallel_client.py             # Parallel Search API client
+├── .env.example                   # Environment variable template
+├── slack_manifest.json            # 1-Click Slack App Manifest
+├── slack_app.py                   # Slack Bolt Bot (Socket Mode service)
+├── slack_ui.py                    # Slack Block Kit formatters & modal views
+├── parallel_client.py             # Parallel Search API client (https://api.parallel.ai)
 ├── app.py                         # Split-Screen Streamlit app with live telemetry
 ├── prompts/                       # Dedicated Agent Prompts Directory
-│   ├── __init__.py
 │   ├── loader.py                  # Pydantic PromptRegistry with caching & formatting
 │   ├── safety_agent.md            # Agent 1 prompt (Legal red-lines & suppression)
 │   ├── breaking_agent.md          # Agent 2 prompt (Stages 1-2 & 1-call budget)
@@ -195,17 +268,13 @@ spec-agents/
 │   ├── calendar_agent.md          # Agent 4 prompt (Stages 6-7 & 1-call budget)
 │   └── synthesis_agent.md         # Agent 5 prompt (Brief & 8 Archetypes)
 ├── schemas/
-│   ├── __init__.py
 │   └── models.py                  # Pydantic domain, findings & observability models
-├── observability/                 # ADK Telemetry & Tracing Package
-│   ├── __init__.py
+├── observability/
 │   └── tracker.py                 # ADK Callback hooks (before/after agent, tool, model)
 ├── tools/
-│   ├── __init__.py
 │   ├── search_tool.py             # Search query generators & citation consolidators
 │   └── adk_tools.py               # Google ADK FunctionTools wrapping Parallel API
 ├── agents/
-│   ├── __init__.py
 │   ├── guardrails.py              # Hardcoded tool budget callback guardrails
 │   ├── safety_agent.py            # ADK LlmAgent for Safety Triage
 │   ├── breaking_agent.py          # ADK LlmAgent for Ground Truth & Fallout
@@ -214,10 +283,11 @@ spec-agents/
 │   ├── synthesis_agent.py         # ADK LlmAgent for Synthesis & Neutrality Audit
 │   └── pipeline.py                # Assembles ADK SequentialAgent and InMemoryRunner
 ├── ui/
-│   ├── __init__.py
 │   ├── components.py              # Split-screen components, telemetry inspector, citations
 │   └── styles.py                  # Clean, minimalist dark styling
 └── tests/
     ├── test_pipeline.py           # Offline unit tests for queries & formatting
-    └── test_adk_pipeline.py       # Offline unit tests for ADK agents, prompts & guardrails
+    ├── test_adk_pipeline.py       # Offline unit tests for ADK agents, prompts & guardrails
+    └── test_slack_bot.py          # Offline unit tests for Slack UI & Block Kit
 ```
+

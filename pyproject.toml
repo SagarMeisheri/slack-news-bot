@@ -11,6 +11,9 @@ dependencies = [
     "httpx>=0.27.0",
     "pydantic>=2.7.0",
     "python-dotenv>=1.0.1",
+    "slack-bolt>=1.18.0",
+    "aiohttp>=3.9.0",
+    "parallel-web>=0.1.0",
 ]
 
 [tool.uv]

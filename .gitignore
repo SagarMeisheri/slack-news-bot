@@ -92,3 +92,4 @@ scratch/
 ~/.agents/
 .agents/
 data/saved_searches.json
+.claude/

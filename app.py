@@ -572,6 +572,7 @@ async def run_adk_pipeline(
     report = IntelligenceReport(
         query_topic=topic,
         jurisdiction=jurisdiction_str,
+        executive_summary=synthesis_res.executive_summary if synthesis_res else None,
         safety_result=safety_res,
         search_stages=reconstructed_stages,
         baseline_brief=baseline_brief,

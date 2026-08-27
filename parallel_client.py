@@ -1,17 +1,16 @@
 """
 Parallel Web Search API Client.
-Executes natural language web searches and retrieves LLM-optimized excerpts via https://api.parallel.ai/v1/search.
+Executes natural language web searches and retrieves LLM-optimized excerpts via official `parallel-web` SDK.
 """
 
 import logging
 import os
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
-import httpx
+from parallel import AsyncParallel, Parallel, ParallelError
 
 logger = logging.getLogger(__name__)
 
-PARALLEL_API_URL = "https://api.parallel.ai/v1/search"
 DEFAULT_PARALLEL_API_KEY = os.getenv("PARALLEL_API_KEY", "")
 
 
@@ -40,7 +39,7 @@ async def search_parallel(
     timeout_seconds: float = 15.0,
 ) -> ParallelSearchResponse:
     """
-    Executes a web search request against the Parallel Search API.
+    Executes a web search request against the Parallel Search API using the official parallel-web SDK.
     
     Args:
         objective: Natural-language description of the search goal.
@@ -59,47 +58,42 @@ async def search_parallel(
     if not clean_queries:
         clean_queries = [objective[:100]]
 
-    payload: Dict[str, Any] = {
-        "objective": objective,
-        "search_queries": clean_queries,
-        "mode": mode,
-    }
-
-    headers = {
-        "Content-Type": "application/json",
-        "x-api-key": key,
-    }
+    # Map mode if needed (turbo, basic, advanced, fast)
+    sdk_mode = mode if mode in ("turbo", "basic", "advanced", "fast") else "fast"
 
     try:
-        async with httpx.AsyncClient(timeout=timeout_seconds) as client:
-            response = await client.post(PARALLEL_API_URL, json=payload, headers=headers)
-            response.raise_for_status()
-            data = response.json()
+        client = AsyncParallel(api_key=key, timeout=timeout_seconds)
+        response = await client.search(
+            search_queries=clean_queries,
+            objective=objective,
+            mode=sdk_mode,
+        )
 
-            results: List[ParallelSearchResult] = []
-            for item in data.get("results", []):
-                results.append(
-                    ParallelSearchResult(
-                        url=item.get("url", ""),
-                        title=item.get("title", ""),
-                        publish_date=item.get("publish_date"),
-                        excerpts=item.get("excerpts", []) or [],
-                    )
+        results: List[ParallelSearchResult] = []
+        for item in response.results:
+            results.append(
+                ParallelSearchResult(
+                    url=item.url,
+                    title=item.title or "",
+                    publish_date=item.publish_date,
+                    excerpts=item.excerpts or [],
                 )
-
-            return ParallelSearchResponse(
-                search_id=data.get("search_id"),
-                results=results,
-                session_id=data.get("session_id"),
-                warnings=data.get("warnings"),
             )
 
-    except httpx.HTTPStatusError as e:
-        logger.error(f"Parallel Search API returned HTTP error {e.response.status_code}: {e.response.text}")
+        return ParallelSearchResponse(
+            search_id=response.search_id,
+            results=results,
+            session_id=response.session_id,
+            warnings=response.warnings,
+        )
+
+    except ParallelError as e:
+        logger.error(f"Parallel Search SDK Error: {e}")
         return ParallelSearchResponse(search_id=None, results=[])
     except Exception as e:
-        logger.error(f"Parallel Search API request failed: {e}")
+        logger.error(f"Parallel Search request failed: {e}")
         return ParallelSearchResponse(search_id=None, results=[])
+
 
 
 def format_parallel_results_as_context(
@@ -150,66 +144,67 @@ def format_parallel_results_as_context(
 async def plan_parallel_search_queries_with_gemini(
     api_key: str,
     model: str,
-    context_desc: str,
-    context_type: str = "curation",
+    topic: str,
+    initial_research: Optional[str] = None,
+    stage_focus: str = "general",
 ) -> Tuple[str, List[str]]:
     """
-    Uses Gemini API to analyze the news topic or user input and synthesize:
-    1. A precise, natural-language search objective.
-    2. Exactly 2-4 diverse, high-utility keyword search queries (3-6 words each) tailored for Parallel Search API.
+    Uses Gemini LLM in a multi-agent setup to analyze initial research findings
+    and synthesize guided, high-utility search objectives and keyword queries for Parallel Search.
+    
+    Args:
+        api_key: Google Gemini API Key.
+        model: Gemini model name.
+        topic: The headline or topic under investigation.
+        initial_research: Optional synthesized findings from Stage 1/2 Ground Truth.
+        stage_focus: Target search stage focus ('precedent', 'counter', 'calendar', 'primary_sources', or 'general').
     """
     import json
     from google import genai
+    from google.genai import types
 
-    if context_type == "article":
-        system_instruction = (
-            "You are an expert investigative journalist and search query planner. "
-            "Given the headline, background preview, and investigative objective for a developing news story, "
-            "generate: (1) A comprehensive search objective for deep investigative research, and "
-            "(2) 3 to 4 distinct keyword search queries (3 to 6 words each) covering the core event, "
-            "official statements/evidence, background context, and financial/policy impact. "
-            "Respond ONLY with a valid JSON object in the format: {\"objective\": string, \"search_queries\": [string, string, ...]}"
+    system_instruction = (
+        "You are an expert investigative intelligence query planner in a multi-agent news verification system. "
+        "Your task is to analyze the core topic along with any initial research findings already discovered, "
+        "and formulate: (1) A razor-sharp, natural-language search objective, and "
+        "(2) 2 to 4 concise, high-signal keyword search queries (3 to 6 words each) tailored for the Parallel Web Search API.\n"
+        "Anchor your search queries strictly to the verified entity names, regulatory circulars, and specific dates "
+        "identified in the initial research, avoiding generic or repetitive queries.\n"
+        "Respond ONLY with a valid JSON object matching: {\"objective\": string, \"search_queries\": [string, string, ...]}"
+    )
+
+    if initial_research:
+        user_prompt = (
+            f"Topic: \"{topic}\"\n"
+            f"Search Stage Focus: {stage_focus}\n\n"
+            f"Initial Research Findings (Stage 1 & 2 Ground Truth):\n{initial_research}\n\n"
+            f"Formulate a guided search objective and 2-4 targeted keyword probes drilling into the specific entities "
+            f"and claims uncovered above."
         )
-        user_prompt = f"Story Details for Deep-Dive Research:\n{context_desc}"
     else:
-        system_instruction = (
-            "You are a real-time news search query planner. "
-            "Given the target topic or user query, generate: "
-            "(1) A concise search objective to discover the latest breaking updates and verified facts, and "
-            "(2) 2 to 3 distinct keyword search queries (3 to 6 words each) optimized for searching live web news. "
-            "Respond ONLY with a valid JSON object in the format: {\"objective\": string, \"search_queries\": [string, string, ...]}"
+        user_prompt = (
+            f"Topic: \"{topic}\"\n"
+            f"Search Stage Focus: {stage_focus}\n\n"
+            f"Formulate a breaking ground-truth search objective and 2-3 targeted keyword probes to verify what occurred."
         )
-        user_prompt = f"Target Topic / Query:\n{context_desc}"
 
     try:
-        client = genai.Client(api_key=api_key, vertexai=False, http_options={"api_version": "v1beta"})
+        client = genai.Client(api_key=api_key)
         loop = asyncio.get_event_loop()
 
         def _call_gemini():
-            return client.interactions.create(
+            return client.models.generate_content(
                 model=model,
-                system_instruction=system_instruction,
-                input=user_prompt,
-                response_format={
-                    "type": "text",
-                    "mime_type": "application/json",
-                },
-                generation_config={
-                    "thinking_level": "minimal",
-                    "temperature": 0.2,
-                },
-                stream=False,
+                contents=user_prompt,
+                config=types.GenerateContentConfig(
+                    system_instruction=system_instruction,
+                    response_mime_type="application/json",
+                    temperature=0.2,
+                ),
             )
 
         resp = await loop.run_in_executor(None, _call_gemini)
-        raw_text = getattr(resp, "output_text", None) or ""
-        if not raw_text and hasattr(resp, "steps"):
-            for st in resp.steps:
-                if hasattr(st, "content"):
-                    for cb in st.content:
-                        if getattr(cb, "type", None) == "text":
-                            raw_text = getattr(cb, "text", "")
-                            break
+        raw_text = resp.text if hasattr(resp, "text") else ""
 
         if raw_text:
             parsed = json.loads(raw_text.strip())
@@ -219,21 +214,23 @@ async def plan_parallel_search_queries_with_gemini(
             if obj and clean_queries:
                 return obj, clean_queries
     except Exception as e:
-        logger.warning(f"Gemini query planning failed ({e}), using fallback heuristic planner")
+        logger.warning(f"Gemini multi-agent query planning fallback ({e})")
 
-    # Fallback if Gemini planning is unavailable
-    if context_type == "article":
-        fallback_obj = f"Find comprehensive facts, official statements, and background for: {context_desc[:120]}"
+    # Fallback heuristic planner if API is offline or dry-run
+    if initial_research:
+        fallback_obj = f"Investigate {stage_focus} context based on verified facts for: {topic[:100]}"
         fallback_queries = [
-            f"{context_desc[:50]} latest news",
-            f"{context_desc[:50]} verified report",
-            f"{context_desc[:50]} developing updates",
+            f'"{topic[:40]}" {stage_focus} precedent',
+            f'"{topic[:40]}" official filing order',
+            f'"{topic[:40]}" timeline analysis',
         ]
     else:
-        fallback_obj = f"Find top breaking news and developments on: {context_desc[:100]}"
+        fallback_obj = f"Verify breaking ground truth and core event for: {topic[:100]}"
         fallback_queries = [
-            f"{context_desc[:50]} breaking news",
-            f"{context_desc[:50]} updates today",
+            f'"{topic[:40]}" news today',
+            f'"{topic[:40]}" breaking updates',
         ]
+
     return fallback_obj, fallback_queries
+
 

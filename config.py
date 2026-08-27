@@ -6,8 +6,12 @@ Provides Pydantic-based configuration for Gemini models, thinking levels, and ge
 from enum import Enum
 import os
 from typing import List, Optional
+from dotenv import load_dotenv
 from google.genai import types
 from pydantic import BaseModel, Field
+
+load_dotenv()
+
 
 
 class ThinkingMode(str, Enum):
@@ -126,3 +130,36 @@ def get_default_model_config(
         temperature=temperature,
         thinking_level=th_mode,
     )
+
+
+# Slack Bolt Configuration
+def get_slack_bot_token() -> str:
+    return os.getenv("SLACK_BOT_TOKEN", "").strip()
+
+def get_slack_app_token() -> str:
+    return os.getenv("SLACK_APP_TOKEN", "").strip()
+
+def get_slack_signing_secret() -> str:
+    return os.getenv("SLACK_SIGNING_SECRET", "").strip()
+
+SLACK_BOT_TOKEN: str = get_slack_bot_token()
+SLACK_APP_TOKEN: str = get_slack_app_token()
+SLACK_SIGNING_SECRET: str = get_slack_signing_secret()
+
+
+def validate_slack_config(require_app_token: bool = True) -> tuple[bool, str]:
+    """
+    Validates that necessary Slack environment variables are configured.
+
+    Returns:
+        (is_valid, error_message)
+    """
+    bot_tok = get_slack_bot_token()
+    app_tok = get_slack_app_token()
+    if not bot_tok:
+        return False, "SLACK_BOT_TOKEN is missing. Please set it in your .env file."
+    if require_app_token and not app_tok:
+        return False, "SLACK_APP_TOKEN is missing (required for Socket Mode). Please set it in your .env file."
+    return True, ""
+
+
