@@ -197,16 +197,34 @@ async def execute_stage_search(
     )
 
 
-def consolidate_citations(stages: List[SearchStageResult]) -> List[Dict[str, Any]]:
+def consolidate_citations(*args: Any) -> List[Dict[str, Any]]:
     """
-    Deduplicates and consolidates all citations across search stages.
+    Deduplicates and consolidates all citations across search stages or citation lists.
+    Accepts either a single list of SearchStageResult, multiple SearchStageResult lists,
+    or multiple lists of citation dictionaries.
     """
     seen_urls = set()
     consolidated = []
-    for st in stages:
-        for cit in st.citations:
+
+    def process_item(item):
+        if hasattr(item, "citations"):  # SearchStageResult
+            for cit in getattr(item, "citations", []):
+                process_cit(cit)
+        elif isinstance(item, dict):
+            process_cit(item)
+        elif isinstance(item, (list, tuple)):
+            for sub in item:
+                process_item(sub)
+
+    def process_cit(cit):
+        if isinstance(cit, dict):
             url = cit.get("url", "").strip()
             if url and url not in seen_urls:
                 seen_urls.add(url)
                 consolidated.append(cit)
+
+    for arg in args:
+        process_item(arg)
+
     return consolidated
+

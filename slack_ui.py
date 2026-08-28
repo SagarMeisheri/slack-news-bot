@@ -143,10 +143,12 @@ def build_progress_blocks(
     topic: str,
     statuses: Dict[str, str],
     current_detail: Optional[str] = None,
+    status_message: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """
     Constructs a live step-by-step progress view updated via chat_update.
     """
+    detail = status_message or current_detail
     lines = []
     for key, name in STAGE_NAMES.items():
         st = statuses.get(key, "pending")
@@ -165,8 +167,9 @@ def build_progress_blocks(
             lines.append(f"{icon} {name}")
 
     progress_text = "\n".join(lines)
-    if current_detail:
-        progress_text += f"\n\n⚡ *Active Operation:* `{current_detail[:120]}`"
+    if detail:
+        progress_text += f"\n\n⚡ *Active Operation:* `{detail[:120]}`"
+
 
     return [
         {
@@ -242,7 +245,65 @@ def build_safety_suppression_blocks(
     ]
 
 
+def build_news_error_blocks(
+    topic: str,
+    error: str,
+    channel_id: Optional[str] = None,
+    thread_ts: Optional[str] = None,
+    user_id: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """
+    Constructs an error Block Kit card with a '🔄 Retry Investigation' interactive button.
+    """
+    retry_val = f"{topic}|{channel_id or ''}|{thread_ts or ''}|{user_id or ''}"
+    return [
+
+        {
+            "type": "header",
+            "text": {
+                "type": "plain_text",
+                "text": "❌ News Investigation Failed",
+                "emoji": True,
+            },
+        },
+        {
+            "type": "section",
+            "expand": True,
+            "text": {
+                "type": "mrkdwn",
+                "text": f"*Topic:* `{topic}`\n*Error:* `{error}`\n\nClick the button below to re-run the 5-agent investigation without re-typing.",
+            },
+        },
+        {
+            "type": "actions",
+            "elements": [
+                {
+                    "type": "button",
+                    "text": {
+                        "type": "plain_text",
+                        "text": "🔄 Retry Investigation",
+                        "emoji": True,
+                    },
+                    "style": "primary",
+                    "action_id": "slack_action_retry_news",
+                    "value": retry_val[:2000],
+                }
+            ],
+        },
+        {
+            "type": "context",
+            "elements": [
+                {
+                    "type": "mrkdwn",
+                    "text": "⚡ *ADK Pipeline:* Parallel Search, Google GenAI, and Sequential Multi-Agent Architecture",
+                }
+            ],
+        },
+    ]
+
+
 def build_executive_report_blocks(
+
     report: IntelligenceReport,
     report_id: str = "",
 ) -> List[Dict[str, Any]]:
@@ -555,3 +616,159 @@ def build_telemetry_modal(
         "close": {"type": "plain_text", "text": "Close", "emoji": True},
         "blocks": modal_blocks,
     }
+
+
+# ---------------------------------------------------------
+# Sarvam Document OCR UI Builders
+# ---------------------------------------------------------
+
+def build_ocr_progress_blocks(filename: str, status_msg: str = "Digitizing document with Sarvam OCR...") -> List[Dict[str, Any]]:
+    """Builds initial progress Block Kit message for document OCR processing."""
+    return [
+        {
+            "type": "header",
+            "text": {
+                "type": "plain_text",
+                "text": "📄 Sarvam Document Intelligence",
+                "emoji": True,
+            },
+        },
+        {
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": f"⏳ *Processing Document:* `{filename}`\n_{status_msg}_",
+            },
+        },
+        {
+            "type": "context",
+            "elements": [
+                {
+                    "type": "mrkdwn",
+                    "text": "⚡ *Engine:* Sarvam Vision 1.5 (`/doc-ai/v1`) | *Target:* Markdown Layout Extraction",
+                }
+            ],
+        },
+    ]
+
+
+def build_ocr_result_blocks(
+    filename: str,
+    content_type: str,
+    markdown_text: str,
+    execution_time: float,
+    language: str = "en-IN",
+    error: Optional[str] = None,
+    truncated: bool = False,
+    page_count: Optional[int] = None,
+    table_count: int = 0,
+    file_id: Optional[str] = None,
+    channel_id: Optional[str] = None,
+    thread_ts: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """Builds the final formatted Block Kit response for completed OCR jobs."""
+    if error:
+        blocks: List[Dict[str, Any]] = [
+            {
+                "type": "header",
+                "text": {
+                    "type": "plain_text",
+                    "text": "❌ Sarvam Document OCR Failed",
+                    "emoji": True,
+                },
+            },
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": f"*Document:* `{filename}`\n*Error:* {error}",
+                },
+            },
+            {
+                "type": "context",
+                "elements": [
+                    {
+                        "type": "mrkdwn",
+                        "text": f"⏱️ *Duration:* {execution_time:.2f}s | Click the button below to re-run OCR without re-uploading.",
+                    }
+                ],
+            },
+        ]
+        if file_id:
+            retry_val = f"{file_id}|{filename}|{channel_id or ''}|{thread_ts or ''}"
+            blocks.append({
+                "type": "actions",
+                "elements": [
+                    {
+                        "type": "button",
+                        "text": {
+                            "type": "plain_text",
+                            "text": "🔄 Retry OCR",
+                            "emoji": True,
+                        },
+                        "style": "primary",
+                        "action_id": "slack_action_retry_ocr",
+                        "value": retry_val,
+                    }
+                ],
+            })
+        return blocks
+
+    formatted_text = convert_markdown_to_slack_mrkdwn(markdown_text)
+    preview_text = truncate_mrkdwn(formatted_text, max_len=2800)
+
+    pages_str = f"📑 *Pages:* `{page_count}` | " if page_count else ""
+    tables_str = f"📊 *Tables:* `{table_count}` | " if table_count > 0 else ""
+
+    blocks: List[Dict[str, Any]] = [
+        {
+            "type": "header",
+            "text": {
+                "type": "plain_text",
+                "text": "📄 Document Digitization Complete",
+                "emoji": True,
+            },
+        },
+        {
+            "type": "context",
+            "elements": [
+                {
+                    "type": "mrkdwn",
+                    "text": f"📁 *File:* `{filename}` | {pages_str}{tables_str}⏱️ *Time:* {execution_time:.2f}s | 🗣️ *Language:* `{language}`",
+                }
+            ],
+        },
+        {"type": "divider"},
+        {
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": f"*Extracted Document Markdown & Tables:*\n\n{preview_text}",
+            },
+        },
+    ]
+
+
+    if truncated:
+        blocks.append({
+            "type": "context",
+            "elements": [
+                {
+                    "type": "mrkdwn",
+                    "text": "📎 *Notice:* Output was truncated to fit Slack message limits. Full `.md` file snippet attached below in thread.",
+                }
+            ],
+        })
+
+    blocks.append({
+        "type": "context",
+        "elements": [
+            {
+                "type": "mrkdwn",
+                "text": "⚡ *Powered by Sarvam AI Document Intelligence API (Sarvam Vision 1.5)*",
+            }
+        ],
+    })
+
+    return blocks
+

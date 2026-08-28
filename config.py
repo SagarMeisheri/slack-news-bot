@@ -163,3 +163,20 @@ def validate_slack_config(require_app_token: bool = True) -> tuple[bool, str]:
     return True, ""
 
 
+# Sarvam AI OCR Configuration
+def get_sarvam_api_key() -> str:
+    return os.getenv("SARVAM_API_KEY", "").strip()
+
+
+def get_sarvam_default_language() -> str:
+    return os.getenv("SARVAM_DEFAULT_LANGUAGE", "en-IN").strip()
+
+
+def get_slack_allowed_channels() -> List[str]:
+    """Returns a list of channel IDs allowed for automatic listening, or empty list for all."""
+    raw = os.getenv("SLACK_ALLOWED_CHANNELS", "").strip()
+    if not raw:
+        return []
+    return [c.strip() for c in raw.split(",") if c.strip()]
+
+

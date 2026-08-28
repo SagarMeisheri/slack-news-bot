@@ -1,20 +1,23 @@
 """
 ADK Pipeline Module.
 Assembles the 5 specialized LlmAgents into a deterministic ADK SequentialAgent
-and configures the InMemoryRunner with full callback-based Observability tracking and ModelConfig.
+and provides master intent routing between Sarvam Document OCR and News Intelligence.
 """
 
 import logging
-from typing import Optional, Tuple
+from typing import List, Optional, Tuple, Union
 from config import ModelConfig, get_default_model_config
 from google.adk.agents import SequentialAgent
 from google.adk.runners import InMemoryRunner
 from agents.breaking_agent import create_breaking_agent
 from agents.calendar_agent import create_calendar_agent
+from agents.classifier_agent import classify_incoming_request, create_classifier_agent
+from agents.ocr_agent import execute_sarvam_ocr_job
 from agents.precedent_agent import create_precedent_agent
 from agents.safety_agent import create_safety_agent
 from agents.synthesis_agent import create_synthesis_agent
 from observability.tracker import ObservabilityTracker
+from schemas.models import RequestClassification, RequestIntent
 
 logger = logging.getLogger(__name__)
 
@@ -64,3 +67,23 @@ def build_adk_news_pipeline(
     )
 
     return pipeline_agent, runner, obs_tracker
+
+
+async def classify_and_route(
+    text: str,
+    has_files: bool = False,
+    file_names: Optional[List[str]] = None,
+    model_config: Optional[ModelConfig] = None,
+    tracker: Optional[ObservabilityTracker] = None,
+) -> RequestClassification:
+    """
+    Master router using ADK Classifier:
+    Determines whether an incoming event routes to Sarvam OCR or News Intelligence.
+    """
+    return await classify_incoming_request(
+        text=text,
+        has_files=has_files,
+        file_names=file_names,
+        model_config=model_config,
+        tracker=tracker,
+    )

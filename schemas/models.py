@@ -282,3 +282,56 @@ class PipelineProgressState(BaseModel):
     logs: List[AgentStepLog] = Field(default_factory=list)
     is_completed: bool = False
     error: Optional[str] = None
+
+
+# ---------------------------------------------------------
+# Request Classification & OCR Schemas
+# ---------------------------------------------------------
+
+class RequestIntent(str, Enum):
+    NEWS_INTELLIGENCE = "news_request"
+    DOCUMENT_OCR = "ocr_request"
+
+
+class RequestClassification(BaseModel):
+    """Classification of an incoming Slack message or event."""
+    intent: RequestIntent = Field(
+        default=RequestIntent.NEWS_INTELLIGENCE,
+        description="Classified request intent: news_request or ocr_request",
+    )
+    confidence: float = Field(
+        default=0.9,
+        ge=0.0,
+        le=1.0,
+        description="Confidence score for the classification",
+    )
+    language: Optional[str] = Field(
+        default="en-IN",
+        description="Detected document/text language code (e.g. en-IN, hi-IN)",
+    )
+    rationale: str = Field(
+        default="",
+        description="Reasoning behind routing classification",
+    )
+    extracted_query_or_filename: Optional[str] = Field(
+        default=None,
+        description="Cleaned topic query or target filename",
+    )
+
+
+class OCRProcessingResult(BaseModel):
+    """Result of Sarvam Document OCR digitization."""
+    filename: str = Field(..., description="Name of the digitized document")
+    content_type: str = Field(default="application/pdf", description="Document MIME type")
+    markdown_content: str = Field(default="", description="Full extracted markdown text with tables")
+    page_count: Optional[int] = Field(default=None, description="Estimated page count if available")
+    table_count: int = Field(default=0, description="Number of extracted tables")
+    execution_time_seconds: float = Field(default=0.0, description="Processing duration in seconds")
+    language: str = Field(default="en-IN", description="Language used for digitization")
+    truncated: bool = Field(default=False, description="Whether display content was truncated for Slack message limits")
+    file_upload_required: bool = Field(default=False, description="Whether a .md file attachment was uploaded")
+    json_filepath: Optional[str] = Field(default=None, description="Saved local path to raw JSON output")
+    md_filepath: Optional[str] = Field(default=None, description="Saved local path to Markdown output")
+    error: Optional[str] = Field(default=None, description="Error message if processing failed")
+
+

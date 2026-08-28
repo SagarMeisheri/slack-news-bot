@@ -19,23 +19,36 @@ from schemas.models import (
 
 
 def format_report_markdown(
-    baseline: BaselineBrief,
-    inquiries: List[SpeculativeInquiry],
+    baseline: Optional[BaselineBrief] = None,
+    inquiries: Optional[List[SpeculativeInquiry]] = None,
     executive_summary: Optional[str] = None,
     top_headlines: Optional[List[str]] = None,
     safety_notice: Optional[str] = None,
     is_full_suppression: bool = False,
     citations: Optional[List[Dict[str, Any]]] = None,
+    topic: Optional[str] = None,
+    jurisdiction: Optional[str] = None,
+    safety_result: Optional[Any] = None,
+    baseline_brief: Optional[BaselineBrief] = None,
+    **kwargs: Any,
 ) -> str:
     """
     Helper to render exact markdown format with executive summary, top headlines,
     baseline brief, standalone inquiries, grounded scenario answers with embedded inline citations,
     and verified references.
     """
+    effective_baseline = baseline or baseline_brief or BaselineBrief(
+        core_event=topic or "Event analysis",
+        immediate_fallout="Assessing multi-stakeholder outcomes",
+        context_precedent="Synthesizing historical precedents",
+    )
+    effective_inquiries = inquiries if inquiries is not None else []
+
     lines = []
 
     if safety_notice:
         lines.append(f"> ⚠️ **{safety_notice}**\n")
+
 
     # 1. Executive TL;DR & Strategic Takeaway
     if executive_summary:
@@ -48,7 +61,7 @@ def format_report_markdown(
         ])
 
     # 2. Top Breaking Headlines
-    headlines = top_headlines or getattr(baseline, "top_headlines", None)
+    headlines = top_headlines or getattr(effective_baseline, "top_headlines", None)
     if headlines:
         lines.extend([
             "### 📰 Top Breaking Headlines",
@@ -78,15 +91,15 @@ def format_report_markdown(
             ])
 
     # 3. Baseline Intelligence Brief
-    date_str = f" ({baseline.core_event_date})" if baseline.core_event_date else ""
+    date_str = f" ({effective_baseline.core_event_date})" if effective_baseline.core_event_date else ""
     lines.extend([
         "### Baseline Intelligence Brief",
-        f"* **Core Event{date_str}**: {baseline.core_event}",
-        f"* **Immediate Fallout**: {baseline.immediate_fallout}",
-        f"* **Context & Precedent**: {baseline.context_precedent}",
+        f"* **Core Event{date_str}**: {effective_baseline.core_event}",
+        f"* **Immediate Fallout**: {effective_baseline.immediate_fallout}",
+        f"* **Context & Precedent**: {effective_baseline.context_precedent}",
     ])
-    if baseline.evidence_note:
-        lines.append(f"* **Evidence Note**: {baseline.evidence_note}")
+    if effective_baseline.evidence_note:
+        lines.append(f"* **Evidence Note**: {effective_baseline.evidence_note}")
 
     # Full suppression early return with references
     if is_full_suppression:
@@ -107,11 +120,12 @@ def format_report_markdown(
     lines.extend(["", "---", "", "### Speculative & Strategic Inquiries", ""])
 
     archetype_groups = {arch: [] for arch in InquiryArchetype}
-    for inq in inquiries:
+    for inq in effective_inquiries:
         if inq.archetype in archetype_groups:
             archetype_groups[inq.archetype].append(inq)
         else:
             archetype_groups[InquiryArchetype.WHY_X].append(inq)
+
 
     archetype_order = [
         (InquiryArchetype.WHY_X, "Why X? (Incentives & Timing)"),

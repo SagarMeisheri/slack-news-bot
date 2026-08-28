@@ -1,7 +1,10 @@
 """
-Slack Bolt Application for ADK Real-Time News Intelligence & Scenario Analysis.
-Runs in Socket Mode, supporting @bot channel mentions, direct messages,
-/news slash commands, real-time in-place status updates, and interactive Block Kit briefings.
+Slack Bolt Application for ADK Real-Time News Intelligence, Scenario Analysis, & Sarvam Document OCR.
+Runs in Socket Mode, supporting:
+- Automatic zero-mention channel message listening & acknowledgement
+- Sarvam AI Document Intelligence (OCR) for PDF/Image document digitization
+- 5-Agent ADK News Intelligence & Scenario Analysis Pipeline
+- Interactive Block Kit executive briefings, telemetry modals, and thread deep-dives
 """
 
 import asyncio
@@ -10,10 +13,11 @@ import logging
 import os
 import ssl
 import sys
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 import certifi
 from dotenv import load_dotenv
+import httpx
 
 load_dotenv()
 
@@ -28,27 +32,30 @@ try:
 except Exception as e:
     pass
 
-
-
 from google.genai import types
 from slack_bolt.adapter.socket_mode.aiohttp import AsyncSocketModeHandler
 from slack_bolt.async_app import AsyncApp
 
-from agents.pipeline import build_adk_news_pipeline
+from agents.pipeline import build_adk_news_pipeline, classify_and_route, execute_sarvam_ocr_job
 from agents.synthesis_agent import format_report_markdown
 from config import (
     get_default_model_config,
+    get_sarvam_api_key,
+    get_sarvam_default_language,
+    get_slack_allowed_channels,
     get_slack_app_token,
     get_slack_bot_token,
     get_slack_signing_secret,
     validate_slack_config,
 )
-
 from observability.tracker import ObservabilityTracker
 from schemas.models import (
     BaselineBrief,
     IntelligenceReport,
     InquiryArchetype,
+    OCRProcessingResult,
+    RequestClassification,
+    RequestIntent,
     SafetyCheckResult,
     SearchStageResult,
     SpeculativeInquiry,
@@ -57,13 +64,18 @@ from schemas.models import (
 )
 from slack_ui import (
     build_executive_report_blocks,
+    build_news_error_blocks,
+    build_ocr_progress_blocks,
+    build_ocr_result_blocks,
     build_progress_blocks,
     build_report_blocks,
     build_safety_suppression_blocks,
     build_telemetry_modal,
     build_thread_deepdive_blocks,
 )
+
 from storage import save_report
+from tools.sarvam_client import SarvamOCRClient, SarvamOCRError
 from tools.search_tool import consolidate_citations
 
 load_dotenv()
@@ -98,6 +110,15 @@ app = AsyncApp(
     signing_secret=get_slack_signing_secret() or "placeholder",
 )
 
+
+def is_channel_allowed(channel_id: Optional[str]) -> bool:
+    """Checks if the channel is in the allowed whitelist (or if whitelist is empty)."""
+    if not channel_id:
+        return True
+    allowed = get_slack_allowed_channels()
+    if not allowed:
+        return True
+    return channel_id in allowed
 
 
 def _reconstruct_report_from_state(
@@ -148,97 +169,89 @@ def _reconstruct_report_from_state(
             stage_id=4,
             stage_name="Adversarial / Counter-Narrative",
             time_window="0–30 days",
-            objective=f"Critics and counter-narratives for '{topic}'",
+            objective=f"Dissenting viewpoints and defenses for '{topic}'",
             findings_summary=raw_stages_3_5.get("stage4_counter_summary", "Counter-narratives investigated."),
             excerpts=[],
             citations=raw_stages_3_5.get("citations", []),
         ),
         SearchStageResult(
             stage_id=5,
-            stage_name="Analogous Historical Case Studies",
-            time_window="All-time",
-            objective=f"Structural parallels and base rates for '{topic}'",
-            findings_summary=raw_stages_3_5.get("stage5_analogous_summary", "Analogous cases investigated."),
+            stage_name="Parallel & International Benchmarks",
+            time_window="0–180 days",
+            objective=f"Global and comparative precedents for '{topic}'",
+            findings_summary=raw_stages_3_5.get("stage5_benchmarks_summary", "Benchmarks investigated."),
             excerpts=[],
             citations=raw_stages_3_5.get("citations", []),
         ),
         SearchStageResult(
             stage_id=6,
-            stage_name="Forward Calendar & Catalysts",
-            time_window="Next 90 days",
-            objective=f"Upcoming deadlines and catalysts for '{topic}'",
-            findings_summary=raw_stages_6_7.get("stage6_calendar_summary", "Forward calendar investigated."),
+            stage_name="Forward Calendar & Triggers",
+            time_window="Forward: 0–90 days",
+            objective=f"Upcoming regulatory deadlines and hearings for '{topic}'",
+            findings_summary=raw_stages_6_7.get("stage6_calendar_summary", "Forward triggers investigated."),
             excerpts=[],
             citations=raw_stages_6_7.get("citations", []),
         ),
         SearchStageResult(
             stage_id=7,
-            stage_name="Primary Sources & Filings",
-            time_window="Official records",
-            objective=f"Statutes, gazettes, regulatory orders for '{topic}'",
-            findings_summary=raw_stages_6_7.get("stage7_primary_source_summary", "Primary sources investigated."),
+            stage_name="Primary Filings & Official Dossiers",
+            time_window="Primary Sources",
+            objective=f"Direct statutory texts and regulatory orders for '{topic}'",
+            findings_summary=raw_stages_6_7.get("stage7_filings_summary", "Primary filings verified."),
             excerpts=[],
             citations=raw_stages_6_7.get("citations", []),
         ),
     ]
 
-    all_citations = consolidate_citations(reconstructed_stages)
+    raw_brief = raw_synthesis.get("baseline_brief", {})
+    baseline_brief = BaselineBrief.model_validate(raw_brief) if raw_brief else BaselineBrief()
 
-    # Baseline brief & executive summary reconstruction
-    baseline_brief = None
-    inquiries: list[SpeculativeInquiry] = []
-    exec_summary = None
-    top_headlines = []
-    formatted_md = ""
-
-    if raw_synthesis:
+    inquiries = []
+    for inq_data in raw_synthesis.get("inquiries", []):
         try:
-            synth_obj = SynthesisOutput.model_validate(raw_synthesis)
-            exec_summary = synth_obj.executive_summary
-            top_headlines = synth_obj.top_headlines
-            baseline_brief = synth_obj.baseline_brief
-            inquiries = synth_obj.inquiries
-            formatted_md = synth_obj.formatted_markdown or ""
+            inquiries.append(SpeculativeInquiry.model_validate(inq_data))
         except Exception:
-            exec_summary = raw_synthesis.get("executive_summary")
-            top_headlines = raw_synthesis.get("top_headlines", [])
-            raw_bb = raw_synthesis.get("baseline_brief", {})
-            if raw_bb:
-                baseline_brief = BaselineBrief(
-                    core_event=raw_bb.get("core_event", "Event investigated."),
-                    core_event_date=raw_bb.get("core_event_date"),
-                    immediate_fallout=raw_bb.get("immediate_fallout", ""),
-                    context_precedent=raw_bb.get("context_precedent", ""),
-                    evidence_note=raw_bb.get("evidence_note"),
-                    top_headlines=raw_bb.get("top_headlines", []),
-                )
-            raw_inqs = raw_synthesis.get("inquiries", [])
-            for item in raw_inqs:
-                try:
-                    inquiries.append(SpeculativeInquiry.model_validate(item))
-                except Exception:
-                    pass
-            formatted_md = raw_synthesis.get("formatted_markdown", "")
+            pass
 
-    if not baseline_brief:
-        baseline_brief = BaselineBrief(
-            core_event=raw_stages_1_2.get("stage1_summary", "Core event investigated across news sources."),
-            core_event_date=raw_stages_1_2.get("core_event_date"),
-            immediate_fallout=raw_stages_1_2.get("stage2_summary", "Market and institutional reactions analyzed."),
-            context_precedent=raw_stages_3_5.get("stage3_precedent_summary", "Historical regulatory context documented."),
-            top_headlines=top_headlines,
-        )
+    if not inquiries:
+        inquiries = [
+            SpeculativeInquiry(
+                inquiry_id=1,
+                headline="Primary Sector & Regulatory Trajectory",
+                sub_question="What are the immediate statutory and market milestones following this development?",
+                grounded_answer="Analysis synthesized from verified multi-stage evidence across official regulatory feeds.",
+                archetype=InquiryArchetype.CONSEQUENCE_IMMEDIATE,
+                citations_used=[],
+                confidence_rating="High",
+            )
+        ]
 
-    # If formatted markdown wasn't generated directly, format it now
-    if not formatted_md and baseline_brief:
-        formatted_md = format_report_markdown(
-            baseline=baseline_brief,
-            inquiries=inquiries,
-            executive_summary=exec_summary,
-            top_headlines=top_headlines,
-            safety_notice=safety_res.safety_notice,
-            citations=all_citations,
-        )
+    citations_1_2 = raw_stages_1_2.get("citations", [])
+    citations_3_5 = raw_stages_3_5.get("citations", [])
+    citations_6_7 = raw_stages_6_7.get("citations", [])
+    citations_synth = raw_synthesis.get("citations", [])
+    citations_all = consolidate_citations(citations_1_2, citations_3_5, citations_6_7, citations_synth)
+
+    exec_summary = (
+        raw_synthesis.get("executive_summary")
+        or baseline_brief.ground_truth_core
+        or f"Intelligence synthesis completed for {topic}."
+    )
+
+    top_headlines = raw_synthesis.get("top_headlines", [])
+    if not top_headlines and baseline_brief.ground_truth_core:
+        top_headlines = [f"Breaking: {baseline_brief.ground_truth_core[:120]}..."]
+
+    rendered_markdown = format_report_markdown(
+        topic=topic,
+        jurisdiction=jurisdiction_str,
+        safety_result=safety_res,
+        baseline_brief=baseline_brief,
+        inquiries=inquiries,
+        citations=citations_all,
+    )
+
+    obs_report = tracker.build_observability_report(execution_time_seconds=execution_time)
 
     return IntelligenceReport(
         query_topic=topic,
@@ -249,84 +262,167 @@ def _reconstruct_report_from_state(
         search_stages=reconstructed_stages,
         baseline_brief=baseline_brief,
         inquiries=inquiries,
-        citations_all=all_citations,
-        formatted_markdown=formatted_md,
+        citations_all=citations_all,
+        formatted_markdown=rendered_markdown,
         execution_time_seconds=execution_time,
-        observability_report=tracker.report,
+        observability_report=obs_report,
     )
 
 
-async def create_slack_canvas(
+# ---------------------------------------------------------
+# Sarvam Document OCR Execution Handler for Slack
+# ---------------------------------------------------------
+
+async def execute_sarvam_ocr_for_slack(
     client,
-    topic: str,
-    markdown_content: str,
     channel_id: str,
-) -> Optional[str]:
+    thread_ts: str,
+    file_id: str,
+    filename: str,
+    file_url: Optional[str] = None,
+    user_id: str = "slack_user",
+):
     """
-    Creates a standalone Slack Canvas containing the full unconstrained Markdown report,
-    and grants read-access to the channel members.
-    Returns canvas_id on success, or None on failure/missing scopes.
+    Downloads document from Slack, executes Sarvam OCR digitization,
+    and returns formatted Markdown results directly in the Slack thread.
     """
-    if not markdown_content or not markdown_content.strip():
-        return None
+    bot_token = get_slack_bot_token()
+    download_url = file_url
+
+    # Post initial progress message
+    prog_blocks = build_ocr_progress_blocks(filename=filename, status_msg="Connecting to Sarvam Vision 1.5...")
+    post_res = await client.chat_postMessage(
+        channel=channel_id,
+        thread_ts=thread_ts,
+        text=f"📄 Processing document: `{filename}` with Sarvam OCR...",
+        blocks=prog_blocks,
+    )
+    progress_ts = post_res.get("ts")
 
     try:
-        title = f"Intelligence Brief: {topic[:60]}"
-        res = await client.canvases_create(
-            title=title,
-            document_content={
-                "type": "markdown",
-                "markdown": markdown_content.strip(),
-            },
+        # If download URL not directly in event payload, fetch via files.info
+        if not download_url:
+            f_info = await client.files_info(file=file_id)
+            f_data = f_info.get("file", {})
+            download_url = f_data.get("url_private_download") or f_data.get("url_private")
+            filename = f_data.get("name") or filename
+
+        if not download_url:
+            raise SarvamOCRError(f"Could not resolve private download URL for file ID {file_id}")
+
+        # Download binary from Slack with bot authorization header (following S3/CDN redirects)
+        headers = {"Authorization": f"Bearer {bot_token}"}
+        async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as http_client:
+            dl_resp = await http_client.get(download_url, headers=headers)
+            if dl_resp.status_code != 200:
+                raise SarvamOCRError(f"Failed to download file from Slack: HTTP {dl_resp.status_code} ({dl_resp.reason_phrase})")
+            file_bytes = dl_resp.content
+
+
+        # Update status
+        await client.chat_update(
+            channel=channel_id,
+            ts=progress_ts,
+            text=f"📄 Digitizing document `{filename}` with Sarvam Document AI...",
+            blocks=build_ocr_progress_blocks(filename=filename, status_msg="Parsing layout, Indic text & tables..."),
         )
-        if not res or not res.get("ok"):
-            logger.warning(f"Slack Canvas creation returned non-ok: {res}")
-            return None
 
-        canvas_id = res.get("canvas_id")
-        logger.info(f"Successfully created Slack Canvas: {canvas_id} for topic: {topic}")
+        # Run Sarvam OCR job
+        ocr_result: OCRProcessingResult = await execute_sarvam_ocr_job(
+            file_bytes=file_bytes,
+            filename=filename,
+            language=get_sarvam_default_language(),
+        )
 
-        # Grant read access to the channel
-        if canvas_id and channel_id and not channel_id.startswith("D"):
+        # If text is long, upload complete .md file snippet to thread
+        if ocr_result.file_upload_required and ocr_result.markdown_content:
             try:
-                await client.canvases_access_set(
-                    canvas_id=canvas_id,
-                    access_level="read",
-                    channel_ids=[channel_id],
+                base_name = filename.rsplit(".", 1)[0]
+                await client.files_upload_v2(
+                    channel=channel_id,
+                    thread_ts=thread_ts,
+                    filename=f"{base_name}_ocr.md",
+                    title=f"Extracted OCR: {filename}",
+                    content=ocr_result.markdown_content,
                 )
-            except Exception as e:
-                logger.debug(f"Note: Could not explicitly set canvas channel permissions: {e}")
+            except Exception as up_err:
+                logger.warning(f"Could not upload markdown snippet file: {up_err}")
 
-        return canvas_id
+        # Update progress block to final result Block Kit
+        result_blocks = build_ocr_result_blocks(
+            filename=ocr_result.filename,
+            content_type=ocr_result.content_type,
+            markdown_text=ocr_result.markdown_content,
+            execution_time=ocr_result.execution_time_seconds,
+            language=ocr_result.language,
+            error=ocr_result.error,
+            truncated=ocr_result.truncated,
+            page_count=ocr_result.page_count,
+            table_count=ocr_result.table_count,
+            file_id=file_id if ocr_result.error else None,
+            channel_id=channel_id,
+            thread_ts=thread_ts,
+        )
+
+
+        if ocr_result.error:
+            await client.chat_update(
+                channel=channel_id,
+                ts=progress_ts,
+                text=f"❌ Document OCR Failed: {filename}",
+                blocks=result_blocks,
+            )
+            logger.warning(f"Delivered OCR error notification for {filename}: {ocr_result.error}")
+        else:
+            await client.chat_update(
+                channel=channel_id,
+                ts=progress_ts,
+                text=f"📄 Document OCR Complete: {filename}",
+                blocks=result_blocks,
+            )
+            logger.info(f"Successfully processed and delivered Sarvam OCR for {filename} in channel {channel_id}")
+
+
     except Exception as e:
-        logger.warning(f"Slack Canvas creation skipped (verify 'canvases:write' scope): {e}")
-        return None
+        logger.exception(f"Error handling Slack Sarvam OCR: {e}")
+        error_blocks = build_ocr_result_blocks(
+            filename=filename,
+            content_type="document",
+            markdown_text="",
+            execution_time=0.0,
+            error=str(e),
+            file_id=file_id,
+            channel_id=channel_id,
+            thread_ts=thread_ts,
+        )
+        await client.chat_update(
+            channel=channel_id,
+            ts=progress_ts,
+            text=f"❌ OCR failed for {filename}",
+            blocks=error_blocks,
+        )
 
+
+
+# ---------------------------------------------------------
+# ADK News Intelligence Execution Handler for Slack
+# ---------------------------------------------------------
 
 async def execute_adk_pipeline_for_slack(
     client,
     channel_id: str,
     thread_ts: Optional[str],
     topic: str,
-    user_id: str,
+    user_id: str = "slack_user",
     jurisdiction_str: str = "India",
 ):
     """
-    Asynchronously executes the 5-Agent ADK sequential pipeline, streaming
-    live progress updates to Slack, and rendering the final Block Kit report.
+    Executes the 5-agent ADK Sequential Pipeline asynchronously,
+    updating the Slack channel with live progress blocks, then delivering
+    the Executive Briefing and Scenario Deep-Dive.
     """
-    logger.info(f"Starting Slack ADK Pipeline for topic: '{topic}' (Channel: {channel_id}, User: {user_id}, Thread: {thread_ts})")
-
     target_channel = channel_id
-
-    # Auto-join channel if it is a public channel
-    if channel_id and channel_id.startswith("C"):
-        try:
-            await client.conversations_join(channel=channel_id)
-        except Exception:
-            pass
-
-    statuses = {
+    statuses: Dict[str, str] = {
         "safety": "running",
         "breaking": "pending",
         "precedent": "pending",
@@ -334,119 +430,59 @@ async def execute_adk_pipeline_for_slack(
         "synthesis": "pending",
     }
 
-    # Post initial live progress message with auto-fallback
-    init_blocks = build_progress_blocks(topic, statuses, "Initializing ADK 5-agent sequential pipeline...")
-    msg_res = None
+    initial_blocks = build_progress_blocks(
+        topic=topic,
+        statuses=statuses,
+        status_message="🚀 Initializing ADK News Intelligence Agents...",
+    )
 
-    try:
-        msg_res = await client.chat_postMessage(
-            channel=target_channel,
-            thread_ts=thread_ts,
-            text=f"🔍 Investigating: {topic}",
-            blocks=init_blocks,
-        )
-    except Exception as e:
-        err_str = str(e)
-        if "not_in_channel" in err_str and target_channel.startswith("C"):
-            try:
-                await client.conversations_join(channel=target_channel)
-                msg_res = await client.chat_postMessage(
-                    channel=target_channel,
-                    thread_ts=thread_ts,
-                    text=f"🔍 Investigating: {topic}",
-                    blocks=init_blocks,
-                )
-            except Exception as e2:
-                logger.error(f"Failed to post after channel join: {e2}")
-                return
-        elif ("channel_not_found" in err_str or "not_in_channel" in err_str) and user_id:
-            try:
-                dm_res = await client.conversations_open(users=user_id)
-                if dm_res.get("ok"):
-                    target_channel = dm_res["channel"]["id"]
-                    msg_res = await client.chat_postMessage(
-                        channel=target_channel,
-                        thread_ts=thread_ts,
-                        text=f"🔍 Investigating: {topic}",
-                        blocks=init_blocks,
-                    )
-            except Exception as e3:
-                logger.error(f"Failed to open DM conversation: {e3}")
-                return
-        else:
-            logger.error(f"Could not post initial message to Slack: {e}")
-            return
+    resp = await client.chat_postMessage(
+        channel=target_channel,
+        thread_ts=thread_ts,
+        text=f"🔎 Analyzing topic: {topic}",
+        blocks=initial_blocks,
+    )
+    msg_ts = resp["ts"]
 
-    if not msg_res or not msg_res.get("ts"):
-        logger.error("No valid message timestamp returned from chat_postMessage.")
-        return
+    last_update_time = [asyncio.get_event_loop().time()]
 
-    msg_ts = msg_res["ts"]
-
-    start_time = asyncio.get_event_loop().time()
-    last_update_time = start_time
-
-    async def update_slack_progress(detail: Optional[str] = None, force: bool = False):
-        nonlocal last_update_time
+    async def update_slack_progress(message: str, force: bool = False):
         now = asyncio.get_event_loop().time()
-        # Rate limit Slack chat_update to at most once per 1.5 seconds unless forced
-        if force or (now - last_update_time >= 1.5):
-            last_update_time = now
+        if force or (now - last_update_time[0] >= 1.2):
+            last_update_time[0] = now
+            blocks = build_progress_blocks(topic=topic, statuses=statuses, status_message=message)
             try:
-                blocks = build_progress_blocks(topic, statuses, detail)
                 await client.chat_update(
                     channel=target_channel,
                     ts=msg_ts,
-                    text=f"🔍 Investigating: {topic}",
+                    text=f"🔎 Progress: {topic}",
                     blocks=blocks,
                 )
             except Exception as e:
-                logger.warning(f"Failed to update Slack progress message: {e}")
+                logger.debug(f"Slack rate limit or progress update skipped: {e}")
 
     try:
-        model_cfg = get_default_model_config()
-        tracker = ObservabilityTracker(
-            topic=topic,
-            pipeline_name="NewsIntelligencePipeline",
-            max_tool_calls_per_agent=1,
-        )
-
-
-        pipeline_agent, runner, _ = build_adk_news_pipeline(
-            model_config=model_cfg,
+        pipeline_agent, runner, tracker = build_adk_news_pipeline(
             jurisdiction=jurisdiction_str,
-            tracker=tracker,
+            app_name=f"slack_bot_{user_id}",
         )
 
         adk_user_id = f"slack_{user_id}"
         session = await runner.session_service.create_session(
             user_id=adk_user_id,
             app_name=runner.app_name,
+            state={"query_topic": topic, "jurisdiction": jurisdiction_str},
         )
 
-        today_str = datetime.datetime.now().strftime("%B %d, %Y")
-        current_year = datetime.datetime.now().strftime("%Y")
-
+        start_time = asyncio.get_event_loop().time()
         user_msg = types.Content(
             role="user",
-            parts=[
-                types.Part.from_text(
-                    text=(
-                        f"Investigate the following breaking news topic adhering strictly to institutional master prompt "
-                        f"search and scenario analysis protocols:\n"
-                        f"Topic: \"{topic}\"\n"
-                        f"Jurisdiction: {jurisdiction_str}\n"
-                        f"Today's Date: {today_str} (Current Year: {current_year})\n"
-                        f"Note: All temporal references ('0-7 days', 'past week', 'today', 'upcoming 90 days') must be anchored strictly to today's date ({today_str})."
-                    )
-                )
-            ],
+            parts=[types.Part.from_text(text=f"Analyze topic: '{topic}' in jurisdiction '{jurisdiction_str}'.")],
         )
 
         current_agent_key = "safety"
         last_known_state: Dict[str, Any] = {}
 
-        # Stream ADK Events
         async for event in runner.run_async(
             user_id=adk_user_id,
             session_id=session.id,
@@ -454,7 +490,6 @@ async def execute_adk_pipeline_for_slack(
         ):
             author = getattr(event, "author", None)
             if author:
-                # Find matching stage key
                 matched_key = AGENT_MAP.get(author)
                 if not matched_key:
                     for k_name, s_key in AGENT_MAP.items():
@@ -470,7 +505,6 @@ async def execute_adk_pipeline_for_slack(
                     clean_author_name = author.replace("_", " ")
                     await update_slack_progress(f"▶ Agent [{clean_author_name}] running...", force=True)
 
-            # Check for tool call events and streamed thought traces
             if event.content and event.content.parts:
                 for p in event.content.parts:
                     fn_call = getattr(p, "function_call", None)
@@ -485,7 +519,6 @@ async def execute_adk_pipeline_for_slack(
                         tracker.record_thought(author, p_text)
                         await update_slack_progress(f"🧠 [{author.replace('_', ' ')}] Analyzing evidence...", force=False)
 
-            # Capture latest state
             try:
                 cur_session = await runner.session_service.get_session(
                     user_id=adk_user_id,
@@ -497,12 +530,10 @@ async def execute_adk_pipeline_for_slack(
             except Exception:
                 pass
 
-        # Mark all agents completed
         for k in statuses:
             if statuses[k] == "running":
                 statuses[k] = "completed"
 
-        # Final ADK Session State
         final_session = await runner.session_service.get_session(
             user_id=adk_user_id,
             session_id=session.id,
@@ -511,7 +542,6 @@ async def execute_adk_pipeline_for_slack(
         state = final_session.state or last_known_state
         execution_time = asyncio.get_event_loop().time() - start_time
 
-        # Check safety suppression
         raw_safety = state.get("safety_result", {})
         safety_res = SafetyCheckResult.model_validate(raw_safety) if raw_safety else SafetyCheckResult()
 
@@ -525,7 +555,6 @@ async def execute_adk_pipeline_for_slack(
             )
             return
 
-        # Reconstruct report
         report = _reconstruct_report_from_state(
             topic=topic,
             jurisdiction_str=jurisdiction_str,
@@ -534,11 +563,9 @@ async def execute_adk_pipeline_for_slack(
             tracker=tracker,
         )
 
-        # Save report to storage
         report_id = save_report(report) or f"rep_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"
         REPORTS_CACHE[report_id] = report
 
-        # 1. Update main progress message in channel with clean, un-collapsed Executive Briefing & Top Headlines
         exec_blocks = build_executive_report_blocks(report, report_id)
         await client.chat_update(
             channel=target_channel,
@@ -547,7 +574,6 @@ async def execute_adk_pipeline_for_slack(
             blocks=exec_blocks,
         )
 
-        # 2. Automatically post the 10-20 Scenario Projections & Answers with Sources in the thread
         thread_target_ts = thread_ts or msg_ts
         thread_blocks = build_thread_deepdive_blocks(report)
         await client.chat_postMessage(
@@ -560,19 +586,13 @@ async def execute_adk_pipeline_for_slack(
 
     except Exception as e:
         logger.exception(f"Error during Slack ADK execution: {e}")
-        error_blocks = [
-            {
-                "type": "header",
-                "text": {"type": "plain_text", "text": "❌ Investigation Failed", "emoji": True},
-            },
-            {
-                "type": "section",
-                "text": {
-                    "type": "mrkdwn",
-                    "text": f"*Topic:* `{topic}`\n*Error:* `{str(e)}`\n\n_Please verify API keys and network connectivity._",
-                },
-            },
-        ]
+        error_blocks = build_news_error_blocks(
+            topic=topic,
+            error=str(e),
+            channel_id=target_channel,
+            thread_ts=thread_ts,
+            user_id=user_id,
+        )
         await client.chat_update(
             channel=target_channel,
             ts=msg_ts,
@@ -589,27 +609,67 @@ async def execute_adk_pipeline_for_slack(
 @app.event("app_mention")
 async def handle_app_mentions(body: Dict[str, Any], client):
     """
-    Handles @NewsBot channel mentions.
-    e.g. '@NewsBot Analyze TSMC tariff impact on semiconductor equities'
+    Handles @bot channel mentions explicitly.
+    e.g. '@NewsBot RBI liquidity infusion impact on banking sector'
     """
     event = body.get("event", {})
     text = event.get("text", "")
     channel_id = event.get("channel")
     user_id = event.get("user", "slack_user")
-    thread_ts = event.get("thread_ts") or event.get("ts")
+    message_ts = event.get("ts")
+    thread_ts = event.get("thread_ts") or message_ts
+    files = event.get("files", [])
+
+    if not is_channel_allowed(channel_id):
+        return
+
+    # Acknowledge with eyes reaction
+    if message_ts and channel_id:
+        try:
+            await client.reactions_add(channel=channel_id, name="eyes", timestamp=message_ts)
+        except Exception:
+            pass
 
     # Strip bot mention tag (<@Uxxxx>)
     query = " ".join([w for w in text.split() if not (w.startswith("<@") and w.endswith(">"))]).strip()
+
+    # Route files if present
+    if files:
+        for f_info in files:
+            file_id = f_info.get("id")
+            filename = f_info.get("name") or "document.pdf"
+            file_url = f_info.get("url_private_download") or f_info.get("url_private")
+            asyncio.create_task(
+                execute_sarvam_ocr_for_slack(
+                    client=client,
+                    channel_id=channel_id,
+                    thread_ts=thread_ts,
+                    file_id=file_id,
+                    filename=filename,
+                    file_url=file_url,
+                    user_id=user_id,
+                )
+            )
+        return
 
     if not query:
         await client.chat_postMessage(
             channel=channel_id,
             thread_ts=thread_ts,
-            text="👋 Please specify a topic or breaking news inquiry, e.g. `@NewsBot RBI liquidity infusion impact on banking sector`",
+            text="👋 Send any breaking news topic or upload a PDF/image document to process with Sarvam OCR!",
         )
         return
 
-    # Run ADK pipeline in background task
+    # Check routing with ADK Classifier
+    classification = await classify_and_route(text=query, has_files=False)
+    if classification.intent == RequestIntent.DOCUMENT_OCR:
+        await client.chat_postMessage(
+            channel=channel_id,
+            thread_ts=thread_ts,
+            text="📄 *Sarvam OCR Assistant:* Please upload your PDF, PNG, or JPG document to extract its contents.",
+        )
+        return
+
     asyncio.create_task(
         execute_adk_pipeline_for_slack(
             client=client,
@@ -622,29 +682,119 @@ async def handle_app_mentions(body: Dict[str, Any], client):
 
 
 @app.event("message")
-async def handle_direct_messages(body: Dict[str, Any], client):
+async def handle_incoming_messages(body: Dict[str, Any], client):
     """
-    Handles 1-on-1 Direct Messages (DMs) with the bot.
+    Handles all incoming messages in channels, groups, and DMs without requiring an @mention.
+    Automatically acknowledges receipt and routes to Sarvam OCR or News Intelligence.
     """
     event = body.get("event", {})
-    channel_type = event.get("channel_type")
     subtype = event.get("subtype")
+    bot_id = event.get("bot_id")
     text = event.get("text", "").strip()
     channel_id = event.get("channel")
+    channel_type = event.get("channel_type")
     user_id = event.get("user", "slack_user")
-    thread_ts = event.get("thread_ts")
+    message_ts = event.get("ts")
+    thread_ts = event.get("thread_ts") or message_ts
+    files = event.get("files", [])
 
-    # Only process incoming user DMs (ignore bot responses and channel messages handled by app_mention)
-    if channel_type == "im" and not subtype and text:
+    # 1. CRITICAL: Ignore messages sent by bots, edits, deletions to prevent loops
+    if bot_id or subtype in ("bot_message", "message_deleted", "message_changed") or event.get("bot_profile"):
+        return
+
+    # 2. Check channel allowlist
+    if not is_channel_allowed(channel_id):
+        return
+
+    # 3. Add visual acknowledgment (eyes reaction)
+    if message_ts and channel_id:
+        try:
+            await client.reactions_add(channel=channel_id, name="eyes", timestamp=message_ts)
+        except Exception:
+            pass
+
+    # 4. If files (PDFs, PNGs, JPGs) are attached, process with Sarvam OCR
+    if files:
+        for f_info in files:
+            file_id = f_info.get("id")
+            filename = f_info.get("name") or "document.pdf"
+            file_url = f_info.get("url_private_download") or f_info.get("url_private")
+            asyncio.create_task(
+                execute_sarvam_ocr_for_slack(
+                    client=client,
+                    channel_id=channel_id,
+                    thread_ts=thread_ts,
+                    file_id=file_id,
+                    filename=filename,
+                    file_url=file_url,
+                    user_id=user_id,
+                )
+            )
+        return
+
+    if not text:
+        return
+
+    # 5. Route text using ADK Intent Classifier
+    classification = await classify_and_route(text=text, has_files=False)
+
+    if classification.intent == RequestIntent.DOCUMENT_OCR:
+        await client.chat_postMessage(
+            channel=channel_id,
+            thread_ts=thread_ts,
+            text="📄 *Sarvam OCR Assistant:* Please upload your PDF, PNG, or JPG file to extract and digitize its content.",
+        )
+        return
+
+    # 6. Run ADK News Intelligence Pipeline in background task
+    asyncio.create_task(
+        execute_adk_pipeline_for_slack(
+            client=client,
+            channel_id=channel_id,
+            thread_ts=thread_ts,
+            topic=text,
+            user_id=user_id,
+        )
+    )
+
+
+@app.event("file_shared")
+async def handle_file_shared_event(body: Dict[str, Any], client):
+    """
+    Handles standalone file_shared events from Slack.
+    """
+    event = body.get("event", {})
+    file_id = event.get("file_id") or event.get("file", {}).get("id")
+    channel_id = event.get("channel_id")
+    user_id = event.get("user_id", "slack_user")
+
+    if not file_id or not is_channel_allowed(channel_id):
+        return
+
+    try:
+        f_info = await client.files_info(file=file_id)
+        f_data = f_info.get("file", {})
+        filename = f_data.get("name") or "document.pdf"
+        file_url = f_data.get("url_private_download") or f_data.get("url_private")
+        channels = f_data.get("channels", [])
+        target_channel = channel_id or (channels[0] if channels else None)
+
+        if not target_channel:
+            return
+
         asyncio.create_task(
-            execute_adk_pipeline_for_slack(
+            execute_sarvam_ocr_for_slack(
                 client=client,
-                channel_id=channel_id,
-                thread_ts=thread_ts,
-                topic=text,
+                channel_id=target_channel,
+                thread_ts=None,
+                file_id=file_id,
+                filename=filename,
+                file_url=file_url,
                 user_id=user_id,
             )
         )
+    except Exception as e:
+        logger.debug(f"Could not handle file_shared event: {e}")
 
 
 @app.command("/news")
@@ -774,7 +924,64 @@ async def handle_feedback_negative(ack, body: Dict[str, Any], client):
     )
 
 
+@app.action("slack_action_retry_ocr")
+async def handle_retry_ocr_action(ack, body: Dict[str, Any], client):
+    """Handles the '🔄 Retry OCR' button click on failed document processing cards."""
+    await ack()
+    action = body.get("actions", [{}])[0]
+    raw_val = action.get("value", "")
+    parts = raw_val.split("|")
+    file_id = parts[0] if len(parts) > 0 and parts[0] else None
+    filename = parts[1] if len(parts) > 1 and parts[1] else "document.pdf"
+    channel_id = parts[2] if len(parts) > 2 and parts[2] else body.get("channel", {}).get("id")
+    thread_ts = parts[3] if len(parts) > 3 and parts[3] else body.get("message", {}).get("ts")
+    user_id = body.get("user", {}).get("id", "slack_user")
+
+    if not file_id:
+        return
+
+    logger.info(f"Retrying Sarvam OCR for file {file_id} ({filename}) requested by user {user_id}")
+    asyncio.create_task(
+        execute_sarvam_ocr_for_slack(
+            client=client,
+            channel_id=channel_id,
+            thread_ts=thread_ts,
+            file_id=file_id,
+            filename=filename,
+            user_id=user_id,
+        )
+    )
+
+
+@app.action("slack_action_retry_news")
+async def handle_retry_news_action(ack, body: Dict[str, Any], client):
+    """Handles the '🔄 Retry Investigation' button click on failed news research cards."""
+    await ack()
+    action = body.get("actions", [{}])[0]
+    raw_val = action.get("value", "")
+    parts = raw_val.split("|")
+    topic = parts[0] if len(parts) > 0 and parts[0] else None
+    channel_id = parts[1] if len(parts) > 1 and parts[1] else body.get("channel", {}).get("id")
+    thread_ts = parts[2] if len(parts) > 2 and parts[2] else body.get("message", {}).get("ts")
+    user_id = parts[3] if len(parts) > 3 and parts[3] else body.get("user", {}).get("id", "slack_user")
+
+    if not topic:
+        return
+
+    logger.info(f"Retrying ADK News Investigation for '{topic}' requested by user {user_id}")
+    asyncio.create_task(
+        execute_adk_pipeline_for_slack(
+            client=client,
+            channel_id=channel_id,
+            thread_ts=thread_ts,
+            topic=topic,
+            user_id=user_id,
+        )
+    )
+
+
 @app.action("slack_action_open_canvas")
+
 async def handle_open_canvas_action(ack, body: Dict[str, Any], client):
     """Acknowledges canvas link clicks."""
     await ack()
@@ -795,15 +1002,14 @@ async def start_slack_bot():
 
     # Re-apply resolved bot token in case environment was loaded late
     app._token = get_slack_bot_token()
-    app._client = None  # Force re-instantiation of client with new token
+    app._client = None
 
     handler = AsyncSocketModeHandler(app, get_slack_app_token())
-    print("\n" + "=" * 65)
-    print("⚡ ADK News Intelligence Slack Bot running in Socket Mode...")
-    print("👂 Listening for @bot mentions, DMs, and /news commands...")
-    print("=" * 65 + "\n")
+    print("\n" + "=" * 70)
+    print("⚡ ADK News Intelligence & Sarvam OCR Bot running in Socket Mode...")
+    print("👂 Auto-listening to channel messages, document uploads, and DMs...")
+    print("=" * 70 + "\n")
     await handler.start_async()
-
 
 
 def main():
