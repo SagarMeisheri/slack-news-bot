@@ -74,9 +74,10 @@ from slack_ui import (
     build_thread_deepdive_blocks,
 )
 
-from storage import save_report
+from storage import save_report, save_stage_checkpoint
 from tools.sarvam_client import SarvamOCRClient, SarvamOCRError
 from tools.search_tool import consolidate_citations
+
 
 load_dotenv()
 
@@ -542,6 +543,9 @@ async def execute_adk_pipeline_for_slack(
         state = final_session.state or last_known_state
         execution_time = asyncio.get_event_loop().time() - start_time
 
+        # Save completed state checkpoint to disk
+        save_stage_checkpoint(topic=topic, stage_name="pipeline_completed", state_data=state)
+
         raw_safety = state.get("safety_result", {})
         safety_res = SafetyCheckResult.model_validate(raw_safety) if raw_safety else SafetyCheckResult()
 
@@ -586,6 +590,10 @@ async def execute_adk_pipeline_for_slack(
 
     except Exception as e:
         logger.exception(f"Error during Slack ADK execution: {e}")
+        # Save error checkpoint with all collected state so far
+        if 'last_known_state' in locals() and last_known_state:
+            save_stage_checkpoint(topic=topic, stage_name="error_checkpoint", state_data=last_known_state)
+
         error_blocks = build_news_error_blocks(
             topic=topic,
             error=str(e),
@@ -593,6 +601,7 @@ async def execute_adk_pipeline_for_slack(
             thread_ts=thread_ts,
             user_id=user_id,
         )
+
         await client.chat_update(
             channel=target_channel,
             ts=msg_ts,

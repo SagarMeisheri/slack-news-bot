@@ -25,10 +25,12 @@ from slack_ui import (
     build_telemetry_modal,
     build_thread_deepdive_blocks,
     convert_markdown_to_slack_mrkdwn,
+    format_as_bullet_points,
     format_slack_url,
     split_markdown_into_slack_blocks,
     truncate_mrkdwn,
 )
+
 
 
 class TestSlackBotUI(unittest.TestCase):
@@ -64,6 +66,18 @@ class TestSlackBotUI(unittest.TestCase):
         self.assertIn("<https://reuters.com/article|Reuters>", mrkdwn)
         self.assertIn("*major updates*", mrkdwn)
         self.assertIn("*Core Brief*", mrkdwn)
+
+    def test_format_as_bullet_points(self):
+        prose = "TSMC began tool installation. Production begins in Q1 2026. Global supply chains will stabilize."
+        bullets = format_as_bullet_points(prose)
+        self.assertIn("• TSMC began tool installation.", bullets)
+        self.assertIn("• Production begins in Q1 2026.", bullets)
+        self.assertIn("• Global supply chains will stabilize.", bullets)
+
+        existing_bullets = "* Item 1\n- Item 2\n• Item 3"
+        normalized = format_as_bullet_points(existing_bullets)
+        self.assertEqual(normalized, "• Item 1\n• Item 2\n• Item 3")
+
 
     def test_split_markdown_into_slack_blocks(self):
         text = "Section 1\n\n---\n\nSection 2 with [Link](https://example.com)"

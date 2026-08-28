@@ -331,10 +331,18 @@ class ObservabilityTracker:
 
         return None
 
+    def build_observability_report(self, execution_time_seconds: Optional[float] = None) -> PipelineObservabilityReport:
+        """Constructs and returns the finalized pipeline observability report."""
+        if execution_time_seconds is not None:
+            self.report.total_duration_seconds = round(execution_time_seconds, 2)
+        return self.finalize(is_successful=True)
+
     def finalize(self, is_successful: bool = True, error_message: Optional[str] = None) -> PipelineObservabilityReport:
         """Finalizes and returns the complete pipeline observability report."""
         self.report.end_time = time.time()
-        self.report.total_duration_seconds = round(self.report.end_time - self.report.start_time, 2)
+        if not self.report.total_duration_seconds:
+            self.report.total_duration_seconds = round(self.report.end_time - self.report.start_time, 2)
         self.report.is_successful = is_successful
         self.report.error_message = error_message
         return self.report
+

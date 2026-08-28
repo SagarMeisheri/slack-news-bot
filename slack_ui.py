@@ -80,7 +80,37 @@ def convert_markdown_to_slack_mrkdwn(text: str) -> str:
     return converted
 
 
+def format_as_bullet_points(text: str) -> str:
+    """
+    Converts raw text or paragraphs into clean, distinct Slack bullet points.
+    Handles existing markdown bullets, numbered lists, or prose sentences.
+    """
+    if not text:
+        return ""
+
+    raw_lines = [l.strip() for l in text.strip().split("\n") if l.strip()]
+    bullet_items: List[str] = []
+
+    for line in raw_lines:
+        if line.startswith(("*", "-", "•", "–", "—")):
+            clean_item = re.sub(r"^[\*\-\•\–\—]+\s*", "", line)
+            if clean_item:
+                bullet_items.append(f"• {clean_item}")
+        elif re.match(r"^\d+[\.\)]\s+", line):
+            clean_item = re.sub(r"^\d+[\.\)]\s*", "", line)
+            if clean_item:
+                bullet_items.append(f"• {clean_item}")
+        else:
+            # Split long prose into distinct sentences if needed
+            sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+(?=[A-Z0-9\"'‘“])", line) if s.strip()]
+            for s in sentences:
+                bullet_items.append(f"• {s}")
+
+    return "\n".join(bullet_items) if bullet_items else f"• {text.strip()}"
+
+
 def split_markdown_into_slack_blocks(mrkdwn_text: str, max_chunk_len: int = 1500) -> List[Dict[str, Any]]:
+
     """
     Splits converted mrkdwn text into structured Slack section blocks,
     setting expand: True to prevent Slack's 'See more' collapse.
@@ -337,21 +367,23 @@ def build_executive_report_blocks(
         })
         blocks.append({"type": "divider"})
 
-    # 3. Executive Summary & Strategic Takeaway
+    # 3. Executive Summary & Strategic Takeaway (Bulleted)
     exec_summary = report.executive_summary
     if not exec_summary and report.baseline_brief:
         exec_summary = report.baseline_brief.core_event
 
     if exec_summary:
+        bulleted_summary = format_as_bullet_points(convert_markdown_to_slack_mrkdwn(exec_summary))
         blocks.append({
             "type": "section",
             "expand": True,
             "text": {
                 "type": "mrkdwn",
-                "text": f"⚡ *EXECUTIVE TL;DR & STRATEGIC TAKEAWAY*\n{truncate_mrkdwn(convert_markdown_to_slack_mrkdwn(exec_summary), 1500)}",
+                "text": f"⚡ *EXECUTIVE TL;DR & STRATEGIC TAKEAWAY*\n{truncate_mrkdwn(bulleted_summary, 1500)}",
             },
         })
         blocks.append({"type": "divider"})
+
 
     # 4. Top Breaking Headlines
     headlines_text = ""

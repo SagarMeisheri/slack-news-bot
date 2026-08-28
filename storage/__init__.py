@@ -8,12 +8,15 @@ from .history import (
     list_saved_reports,
     load_saved_report,
     save_report,
+    save_stage_checkpoint,
 )
 
 __all__ = [
     "SAVED_REPORTS_DIR",
     "save_report",
+    "save_stage_checkpoint",
     "list_saved_reports",
     "load_saved_report",
     "delete_saved_report",
 ]
+

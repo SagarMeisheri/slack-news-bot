@@ -54,6 +54,46 @@ def save_report(report: IntelligenceReport) -> str:
         return ""
 
 
+def save_stage_checkpoint(topic: str, stage_name: str, state_data: Dict[str, Any]) -> str:
+    """
+    Saves an intermediate stage checkpoint to disk so no model output or search finding is ever lost.
+    """
+    reports_dir = _ensure_reports_dir()
+    now_str = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    slug = _slugify(topic)
+    clean_stage = re.sub(r"[^\w\-]", "_", stage_name.lower())
+    filename = f"checkpoint_{now_str}_{slug}_{clean_stage}.json"
+    file_path = reports_dir / filename
+
+    try:
+        def serialize_helper(obj):
+            if hasattr(obj, "model_dump"):
+                return obj.model_dump()
+            if hasattr(obj, "__dict__"):
+                return obj.__dict__
+            return str(obj)
+
+        with open(file_path, "w", encoding="utf-8") as f:
+            json.dump(
+                {
+                    "topic": topic,
+                    "stage_name": stage_name,
+                    "timestamp": now_str,
+                    "state": state_data,
+                },
+                f,
+                indent=2,
+                default=serialize_helper,
+                ensure_ascii=False,
+            )
+        logger.info(f"[Checkpoint Saved] {file_path}")
+        return str(file_path)
+    except Exception as e:
+        logger.warning(f"Could not save stage checkpoint: {e}")
+        return ""
+
+
+
 def list_saved_reports() -> List[Dict[str, Any]]:
     """
     Scans saved_reports/ and returns a list of metadata for all saved searches,

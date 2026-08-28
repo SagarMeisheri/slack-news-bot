@@ -93,3 +93,5 @@ scratch/
 .agents/
 data/saved_searches.json
 .claude/
+
+/saved_reports

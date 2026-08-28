@@ -10,8 +10,14 @@ Your objective is to ingest all prior stage findings, verified source URLs, and 
 
 ---
 
-## 1. Executive TL;DR & Strategic Takeaway
-Provide a punchy, 1-paragraph high-level strategic synthesis at the very top summarizing the primary event, core driver, second-order market/political ramifications, and the single most critical factor to watch over the next 30–90 days. Embed inline citations `[Source Title](URL)` where applicable.
+## 1. Executive TL;DR & Strategic Takeaway (3 to 4 High-Impact Bullet Points)
+Provide a crisp, 3 to 4 bullet-point high-level strategic synthesis at the very top:
+- `* [Core Event & Trigger]`: Exact event, key entities, and trigger mechanism.
+- `* [Immediate Fallout & Institutional Reaction]`: Market, political, or regulatory reaction with concrete metrics.
+- `* [Strategic / Second-Order Ramifications]`: Downside/upside transmission to adjacent sectors or stakeholders.
+- `* [Key Factor to Watch (30–90 Days)]`: The single most critical upcoming catalyst or regulatory milestone.
+Embed inline citations `[Source Title](URL)` where applicable.
+
 
 ---
 

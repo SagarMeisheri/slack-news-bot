@@ -52,13 +52,24 @@ def format_report_markdown(
 
     # 1. Executive TL;DR & Strategic Takeaway
     if executive_summary:
+        raw_summary_lines = [l.strip() for l in executive_summary.strip().split("\n") if l.strip()]
+        md_summary_bullets = []
+        for l in raw_summary_lines:
+            if l.startswith(("*", "-", "•", "–", "—")):
+                clean_l = re.sub(r"^[\*\-\•\–\—]+\s*", "", l)
+                md_summary_bullets.append(f"* {clean_l}")
+            else:
+                sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+(?=[A-Z0-9\"'‘“])", l) if s.strip()]
+                for s in sentences:
+                    md_summary_bullets.append(f"* {s}")
         lines.extend([
             "### Executive Summary & Strategic Takeaway",
-            executive_summary.strip(),
+            *md_summary_bullets,
             "",
             "---",
             "",
         ])
+
 
     # 2. Top Breaking Headlines
     headlines = top_headlines or getattr(effective_baseline, "top_headlines", None)
