@@ -15,6 +15,7 @@ from agents.classifier_agent import classify_incoming_request, create_classifier
 from agents.ocr_agent import execute_sarvam_ocr_job
 from agents.precedent_agent import create_precedent_agent
 from agents.safety_agent import create_safety_agent
+from agents.social_agent import create_social_agent
 from agents.synthesis_agent import create_synthesis_agent
 from observability.tracker import ObservabilityTracker
 from schemas.models import RequestClassification, RequestIntent
@@ -28,14 +29,12 @@ def build_adk_news_pipeline(
     jurisdiction: str = "India",
     app_name: str = "news_intelligence_pipeline",
     tracker: Optional[ObservabilityTracker] = None,
+    resume_state: Optional[dict] = None,
 ) -> Tuple[SequentialAgent, InMemoryRunner, ObservabilityTracker]:
     """
-    Constructs the complete 5-agent ADK Sequential Pipeline with ModelConfig and Thinking levels:
-    1. Safety & Triage Agent
-    2. Breaking & Fallout Investigator
-    3. Precedent & Counter-Narrative Investigator
-    4. Forward Calendar & Primary Source Investigator
-    5. Synthesis & Neutrality Auditor
+    Constructs the 6-agent ADK Sequential Pipeline with ModelConfig and Thinking levels.
+    If resume_state is provided, agents whose outputs are already present in resume_state
+    are skipped to avoid redundant execution or search API calls.
 
     Returns:
         (pipeline_agent, runner, tracker)
@@ -43,22 +42,47 @@ def build_adk_news_pipeline(
     cfg = model_config or get_default_model_config(model_name=model)
     obs_tracker = tracker or ObservabilityTracker(pipeline_name=app_name)
 
-    safety_agent = create_safety_agent(model_config=cfg, jurisdiction=jurisdiction, tracker=obs_tracker)
-    breaking_agent = create_breaking_agent(model_config=cfg, tracker=obs_tracker)
-    precedent_agent = create_precedent_agent(model_config=cfg, tracker=obs_tracker)
-    calendar_agent = create_calendar_agent(model_config=cfg, tracker=obs_tracker)
-    synthesis_agent = create_synthesis_agent(model_config=cfg, jurisdiction=jurisdiction, tracker=obs_tracker)
+    sub_agents = []
+
+    # 1. Safety & Triage Agent
+    if not (resume_state and resume_state.get("safety_result")):
+        safety_agent = create_safety_agent(model_config=cfg, jurisdiction=jurisdiction, tracker=obs_tracker)
+        sub_agents.append(safety_agent)
+
+    # 2. Breaking & Fallout Investigator
+    if not (resume_state and resume_state.get("stages_1_2")):
+        breaking_agent = create_breaking_agent(model_config=cfg, tracker=obs_tracker)
+        sub_agents.append(breaking_agent)
+
+    # 3. Precedent & Counter-Narrative Investigator
+    if not (resume_state and resume_state.get("stages_3_5")):
+        precedent_agent = create_precedent_agent(model_config=cfg, tracker=obs_tracker)
+        sub_agents.append(precedent_agent)
+
+    # 4. Social Media & Public Sentiment Investigator
+    if not (resume_state and resume_state.get("stages_8")):
+        social_agent = create_social_agent(model_config=cfg, tracker=obs_tracker)
+        sub_agents.append(social_agent)
+
+    # 5. Forward Calendar & Primary Source Investigator
+    if not (resume_state and resume_state.get("stages_6_7")):
+        calendar_agent = create_calendar_agent(model_config=cfg, tracker=obs_tracker)
+        sub_agents.append(calendar_agent)
+
+    # 6. Synthesis & Neutrality Auditor
+    if not (resume_state and resume_state.get("synthesis_output")):
+        synthesis_agent = create_synthesis_agent(model_config=cfg, jurisdiction=jurisdiction, tracker=obs_tracker)
+        sub_agents.append(synthesis_agent)
+
+    # Fallback to synthesis_agent if all stages are already present
+    if not sub_agents:
+        synthesis_agent = create_synthesis_agent(model_config=cfg, jurisdiction=jurisdiction, tracker=obs_tracker)
+        sub_agents.append(synthesis_agent)
 
     pipeline_agent = SequentialAgent(
         name="NewsIntelligencePipeline",
-        description="Sequential 5-agent pipeline for safety triage, 1-call search investigation, and scenario analysis synthesis.",
-        sub_agents=[
-            safety_agent,
-            breaking_agent,
-            precedent_agent,
-            calendar_agent,
-            synthesis_agent,
-        ],
+        description="Sequential 6-agent pipeline for safety triage, 1-call search investigation, social sentiment, and scenario analysis synthesis.",
+        sub_agents=sub_agents,
     )
 
     runner = InMemoryRunner(
@@ -67,6 +91,7 @@ def build_adk_news_pipeline(
     )
 
     return pipeline_agent, runner, obs_tracker
+
 
 
 async def classify_and_route(

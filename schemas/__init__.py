@@ -8,6 +8,8 @@ from .models import (
     SpeculativeInquiry,
     IntelligenceReport,
     PipelineProgressState,
+    CitationItem,
+    SocialFindings,
 )
 
 __all__ = [
@@ -18,4 +20,7 @@ __all__ = [
     "SpeculativeInquiry",
     "IntelligenceReport",
     "PipelineProgressState",
+    "CitationItem",
+    "SocialFindings",
 ]
+

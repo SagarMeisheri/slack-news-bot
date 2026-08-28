@@ -30,8 +30,10 @@ def format_report_markdown(
     jurisdiction: Optional[str] = None,
     safety_result: Optional[Any] = None,
     baseline_brief: Optional[BaselineBrief] = None,
+    social_findings: Optional[Any] = None,
     **kwargs: Any,
 ) -> str:
+
     """
     Helper to render exact markdown format with executive summary, top headlines,
     baseline brief, standalone inquiries, grounded scenario answers with embedded inline citations,
@@ -112,6 +114,25 @@ def format_report_markdown(
     if effective_baseline.evidence_note:
         lines.append(f"* **Evidence Note**: {effective_baseline.evidence_note}")
 
+    # 4. Public Sentiment & Social Media Buzz (if present)
+    soc_findings = social_findings or kwargs.get("social_findings")
+    if soc_findings:
+        overview = getattr(soc_findings, "sentiment_overview", None) or (soc_findings.get("sentiment_overview") if isinstance(soc_findings, dict) else None)
+        narratives = getattr(soc_findings, "dominant_narratives", []) or (soc_findings.get("dominant_narratives", []) if isinstance(soc_findings, dict) else [])
+        claims = getattr(soc_findings, "viral_claims_or_memes", []) or (soc_findings.get("viral_claims_or_memes", []) if isinstance(soc_findings, dict) else [])
+        quotes = getattr(soc_findings, "community_quotes", []) or (soc_findings.get("community_quotes", []) if isinstance(soc_findings, dict) else [])
+
+        soc_lines = ["", "---", "", "### 💬 Public Sentiment & Social Media Buzz"]
+        if overview:
+            soc_lines.append(f"* **Community Mood**: {overview}")
+        for narr in narratives[:3]:
+            soc_lines.append(f"* **Prevailing Narrative**: {narr}")
+        for clm in claims[:2]:
+            soc_lines.append(f"* **Viral Claim / Buzz**: {clm}")
+        for q in quotes[:2]:
+            soc_lines.append(f"* **Community Voice**: _{q}_")
+        lines.extend(soc_lines)
+
     # Full suppression early return with references
     if is_full_suppression:
         if citations:
@@ -129,6 +150,7 @@ def format_report_markdown(
         return "\n".join(lines)
 
     lines.extend(["", "---", "", "### Speculative & Strategic Inquiries", ""])
+
 
     archetype_groups = {arch: [] for arch in InquiryArchetype}
     for inq in effective_inquiries:

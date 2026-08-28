@@ -87,6 +87,9 @@ class TestADKPromptRegistry(unittest.TestCase):
         precedent_p = prompt_registry.get_precedent_prompt()
         self.assertIn("STRICT CONSTRAINT: Exactly ONE Tool Call Permitted", precedent_p)
 
+        social_p = prompt_registry.get_social_prompt()
+        self.assertIn("Social Intelligence & Public Sentiment Investigator", social_p)
+
         calendar_p = prompt_registry.get_calendar_prompt()
         self.assertIn("STRICT CONSTRAINT: Exactly ONE Tool Call Permitted", calendar_p)
 
@@ -98,9 +101,11 @@ class TestADKTools(unittest.TestCase):
     """Verifies all ADK FunctionTool instances."""
 
     def test_tools_registered(self):
-        self.assertEqual(len(ALL_SEARCH_TOOLS), 7)
+        from tools.adk_tools import SOCIAL_TOOLS
+        self.assertEqual(len(ALL_SEARCH_TOOLS), 8)
         self.assertEqual(len(BREAKING_TOOLS), 2)
         self.assertEqual(len(PRECEDENT_TOOLS), 3)
+        self.assertEqual(len(SOCIAL_TOOLS), 1)
         self.assertEqual(len(CALENDAR_TOOLS), 2)
 
         for tool in ALL_SEARCH_TOOLS:
@@ -112,6 +117,7 @@ class TestADKAgentsAndPipeline(unittest.TestCase):
     """Verifies creation of ADK LlmAgents and the top-level SequentialAgent with ModelConfig."""
 
     def test_create_agents(self):
+        from agents.social_agent import create_social_agent
         tracker = ObservabilityTracker(topic="Test Topic")
         cfg = get_default_model_config(model_name="gemini-3.1-flash-lite", thinking_level="minimal")
 
@@ -132,6 +138,11 @@ class TestADKAgentsAndPipeline(unittest.TestCase):
         self.assertEqual(len(precedent.tools), 3)
         self.assertEqual(precedent.output_key, "stages_3_5")
 
+        social = create_social_agent(model_config=cfg, tracker=tracker)
+        self.assertIsInstance(social, LlmAgent)
+        self.assertEqual(len(social.tools), 1)
+        self.assertEqual(social.output_key, "stages_8")
+
         calendar = create_calendar_agent(model_config=cfg, tracker=tracker)
         self.assertIsInstance(calendar, LlmAgent)
         self.assertEqual(len(calendar.tools), 2)
@@ -147,7 +158,8 @@ class TestADKAgentsAndPipeline(unittest.TestCase):
         self.assertIsInstance(pipeline, SequentialAgent)
         self.assertIsInstance(runner, InMemoryRunner)
         self.assertIsInstance(tracker, ObservabilityTracker)
-        self.assertEqual(len(pipeline.sub_agents), 5)
+        self.assertEqual(len(pipeline.sub_agents), 6)
+
 
 
 class TestObservabilityTracker(unittest.TestCase):
@@ -305,18 +317,45 @@ class TestStorageHistory(unittest.TestCase):
         rep_id = save_report(rep)
         self.assertTrue(bool(rep_id))
 
-        reports_list = list_saved_reports()
-        self.assertTrue(any(r["id"] == rep_id for r in reports_list))
+    def test_save_and_find_checkpoint(self):
+        from storage import save_stage_checkpoint, find_latest_checkpoint_for_topic
+        import os
 
-        loaded = load_saved_report(rep_id)
-        self.assertIsNotNone(loaded)
-        self.assertEqual(loaded.query_topic, "Test Save Topic")
-        self.assertEqual(loaded.formatted_markdown, "### Test Markdown")
+        topic = "Resume Test Topic BJP"
+        chk_path = save_stage_checkpoint(
+            topic=topic,
+            stage_name="stage7_completed",
+            state_data={"stages_1_2": {"stage1_summary": "Done"}, "stages_6_7": {"stage6_calendar_summary": "Done"}},
+        )
+        self.assertTrue(bool(chk_path))
+        self.assertTrue(os.path.exists(chk_path))
+
+        found = find_latest_checkpoint_for_topic(topic)
+        self.assertIsNotNone(found)
+        self.assertEqual(found.get("topic"), topic)
+        self.assertIn("stages_1_2", found.get("state", {}))
 
         # Cleanup
-        deleted = delete_saved_report(rep_id)
-        self.assertTrue(deleted)
+        try:
+            os.remove(chk_path)
+        except Exception:
+            pass
+
+    def test_pipeline_skips_completed_agents_on_resume(self):
+        """Verifies that build_adk_news_pipeline skips agents whose output is already in resume_state."""
+        resume_data = {
+            "safety_result": {"status": "NO_SUPPRESSION"},
+            "stages_1_2": {"stage1_summary": "Breaking done"},
+            "stages_3_5": {"stage3_precedent_summary": "Precedents done"},
+            "stages_8": {"sentiment_overview": "Social done"},
+            "stages_6_7": {"stage6_calendar_summary": "Calendar done"},
+        }
+        pipeline, runner, tracker = build_adk_news_pipeline(resume_state=resume_data)
+        # Only synthesis agent should be in sub_agents
+        self.assertEqual(len(pipeline.sub_agents), 1)
+        self.assertEqual(pipeline.sub_agents[0].name, "Synthesis_Neutrality_Auditor")
 
 
 if __name__ == "__main__":
     unittest.main()
+

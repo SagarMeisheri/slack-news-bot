@@ -93,6 +93,60 @@ def save_stage_checkpoint(topic: str, stage_name: str, state_data: Dict[str, Any
         return ""
 
 
+def find_latest_checkpoint_for_topic(topic: str) -> Optional[Dict[str, Any]]:
+    """
+    Finds the most recent checkpoint file in saved_reports/ for a given topic or slug.
+    Returns the checkpoint dict containing 'state' if found, else None.
+    """
+    reports_dir = _ensure_reports_dir()
+    slug = _slugify(topic)
+
+    # 1. Match by slug in checkpoint filename
+    matching_files = list(reports_dir.glob(f"checkpoint_*_{slug}_*.json"))
+    if not matching_files:
+        # Fallback: search all checkpoints and match topic in json
+        for file_path in sorted(reports_dir.glob("checkpoint_*.json"), key=lambda p: p.stat().st_mtime, reverse=True):
+            try:
+                with open(file_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                cand_topic = data.get("topic", "").strip().lower()
+                if cand_topic == topic.strip().lower() or slug in file_path.stem or topic.lower() in cand_topic:
+                    matching_files.append(file_path)
+                    break
+            except Exception:
+                continue
+
+    if not matching_files:
+        return None
+
+    # Pick the newest file
+    matching_files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    latest_file = matching_files[0]
+
+    try:
+        with open(latest_file, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        logger.info(f"[Checkpoint Found] Resuming topic '{topic}' from {latest_file}")
+        return data
+    except Exception as e:
+        logger.warning(f"Failed to load checkpoint file {latest_file}: {e}")
+        return None
+
+
+def load_checkpoint_file(file_path: str) -> Optional[Dict[str, Any]]:
+    """Loads a specific checkpoint JSON file."""
+    path = Path(file_path)
+    if not path.exists():
+        return None
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception as e:
+        logger.warning(f"Failed to read checkpoint {path}: {e}")
+        return None
+
+
+
 
 def list_saved_reports() -> List[Dict[str, Any]]:
     """

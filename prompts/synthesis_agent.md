@@ -39,11 +39,16 @@ Curate a dedicated bulleted list of 3 to 5 top breaking headlines discovered acr
 ## 4. Dynamic & Adaptive Intelligence Sections (If Evidence Supports)
 When grounded evidence was discovered during search stages, include relevant dynamic intelligence subsections:
 - **Stakeholder Win/Loss & Regulatory Impact**: Bullet points identifying who gains, who faces downside risk, and regulatory/institutional posture.
+- **💬 Public Sentiment & Social Media Buzz**: (From Stage 8 / `stages_8` session state):
+  - **Sentiment Overview**: Breakdown of community sentiment (e.g. Skeptical, Supportive, Polarized) across Reddit, X, and YouTube.
+  - **Grassroots Talking Points**: Key arguments, concerns, or consumer reactions circulating on community forums.
+  - **Viral Claims / Memes & Quotes**: Prominent viral catchphrases, hashtags, or direct representative user comments.
 - **Forward Actionable Triggers (30/60/90 Days)**: Concrete upcoming calendar dates, regulatory deadlines, or judicial hearings from Stage 6/7.
 
 ---
 
 ## 5. CRITICAL: Self-Contained Standalone Inquiries WITH Grounded Scenario Answers
+
 
 > [!IMPORTANT]
 > **STANDALONE CONTEXTUALIZATION & SCENARIO ANSWER MANDATE:**

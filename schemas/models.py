@@ -63,8 +63,16 @@ class SafetyCheckResult(BaseModel):
 
 
 # ---------------------------------------------------------
-# Agent Search Findings Schemas (Agents 2, 3, 4)
+# Agent Search Findings Schemas (Agents 2, 3, 4, 5)
 # ---------------------------------------------------------
+
+class CitationItem(BaseModel):
+    url: str = Field(default="", description="URL of the source")
+    title: Optional[str] = Field(default=None, description="Title of publication or post")
+    source_domain: Optional[str] = Field(default=None, description="Domain name of the source")
+    publish_date: Optional[str] = Field(default=None, description="Publication date if available")
+    stage_name: Optional[str] = Field(default=None, description="Stage name where citation was discovered")
+
 
 class BreakingFindings(BaseModel):
     stage1_summary: str = Field(..., description="Synthesized Stage 1 core factual event and ground truth date")
@@ -72,7 +80,7 @@ class BreakingFindings(BaseModel):
     stage2_summary: str = Field(..., description="Synthesized Stage 2 immediate market/sector fallout and stakeholder reactions")
     key_metrics: List[str] = Field(default_factory=list, description="Concrete metrics, figures, or percentage movements")
     source_conflicts: List[str] = Field(default_factory=list, description="Any discrepancy identified among reporting sources")
-    citations: List[Dict[str, Any]] = Field(default_factory=list, description="Extracted URL citations")
+    citations: List[CitationItem] = Field(default_factory=list, description="Extracted URL citations")
 
 
 class PrecedentFindings(BaseModel):
@@ -80,14 +88,24 @@ class PrecedentFindings(BaseModel):
     stage4_counter_summary: str = Field(..., description="Synthesized Stage 4 critics, dissenters, and competing stakeholder arguments")
     stage5_analogous_summary: str = Field(..., description="Synthesized Stage 5 analogous cross-domain precedents")
     base_rate_notes: Optional[str] = Field(default=None, description="Calibrated base rate / frequency analysis for tail risks")
-    citations: List[Dict[str, Any]] = Field(default_factory=list, description="Extracted URL citations")
+    citations: List[CitationItem] = Field(default_factory=list, description="Extracted URL citations")
 
 
 class CalendarFindings(BaseModel):
     stage6_calendar_summary: str = Field(..., description="Synthesized Stage 6 forward calendar milestones")
     upcoming_dates: List[str] = Field(default_factory=list, description="Concrete upcoming dates and deadlines (e.g. September 15, 2026: SEBI filing deadline)")
     stage7_primary_source_summary: str = Field(..., description="Synthesized Stage 7 primary source filings, official gazettes, or notifications")
-    citations: List[Dict[str, Any]] = Field(default_factory=list, description="Extracted URL citations")
+    citations: List[CitationItem] = Field(default_factory=list, description="Extracted URL citations")
+
+
+class SocialFindings(BaseModel):
+    sentiment_overview: str = Field(..., description="Overall public sentiment breakdown (e.g. 60% Critical / 30% Neutral / 10% Supportive)")
+    dominant_narratives: List[str] = Field(default_factory=list, description="Key arguments, concerns, or prevailing grassroots viewpoints")
+    viral_claims_or_memes: List[str] = Field(default_factory=list, description="Trending hashtags, viral claims, or memes circulating on social platforms")
+    community_quotes: List[str] = Field(default_factory=list, description="Representative quotes or comments from Reddit, X, YouTube, LinkedIn, or Threads")
+    citations: List[CitationItem] = Field(default_factory=list, description="Extracted URL citations from social platforms")
+
+
 
 
 # ---------------------------------------------------------
@@ -178,6 +196,10 @@ class SynthesisOutput(BaseModel):
         description="Top 3-5 breaking headlines with markdown links [Headline](URL)",
     )
     baseline_brief: BaselineBrief = Field(..., description="Crisp date-grounded baseline intelligence brief")
+    social_findings: Optional[SocialFindings] = Field(
+        default=None,
+        description="Synthesized Stage 8 social media sentiment, community narratives, and trending claims",
+    )
     inquiries: List[SpeculativeInquiry] = Field(default_factory=list, description="10-20 grounded speculative inquiries with answers")
     formatted_markdown: str = Field(..., description="Rendered markdown output matching master_prompt.md Section 6")
 
@@ -258,7 +280,12 @@ class IntelligenceReport(BaseModel):
     safety_result: SafetyCheckResult = Field(..., description="Safety and suppression audit result")
     search_stages: List[SearchStageResult] = Field(default_factory=list, description="All 7 search stage outputs")
     baseline_brief: Optional[BaselineBrief] = Field(default=None, description="Crisp date-grounded baseline brief")
+    social_findings: Optional[SocialFindings] = Field(
+        default=None,
+        description="Stage 8 social media sentiment, community narratives, and trending claims",
+    )
     inquiries: List[SpeculativeInquiry] = Field(default_factory=list, description="10-20 grounded speculative inquiries")
+
     citations_all: List[Dict[str, Any]] = Field(default_factory=list, description="Consolidated unique citation links")
     formatted_markdown: str = Field(default="", description="Rendered markdown output matching master_prompt.md Section 6")
     execution_time_seconds: float = Field(default=0.0, description="Total execution duration in seconds")

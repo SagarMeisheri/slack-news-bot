@@ -257,6 +257,30 @@ async def search_stage_7_primary_source_filings(
     )
 
 
+async def search_stage_8_social_sentiment(
+    topic: str,
+    objective: Optional[str] = None,
+    search_query: Optional[str] = None,
+    custom_focus: Optional[str] = None,
+) -> str:
+    """Executes Stage 8: Social Media Sentiment & Grassroots Reaction Search (0-30 days window).
+    Retrieves public reactions, prevailing grassroots narratives, controversy talking points, viral claims, and community discussions on Reddit, X/Twitter, Threads, YouTube, Hacker News, and LinkedIn.
+
+    Args:
+        topic: The topic, policy, or public figure whose public social reaction is being investigated.
+        objective: Natural language description of the public sentiment search objective.
+        search_query: Specific targeted social media search query (e.g. "Semiconductor tariff (site:reddit.com OR site:twitter.com)").
+        custom_focus: Optional specific community or platform focus (e.g. reddit, twitter, youtube).
+    """
+    return await _run_stage_search_json(
+        8,
+        topic,
+        objective=objective,
+        search_query=search_query,
+        custom_subtopic=custom_focus,
+    )
+
+
 # ADK FunctionTool instances
 tool_stage_1 = FunctionTool(search_stage_1_ground_truth)
 tool_stage_2 = FunctionTool(search_stage_2_immediate_fallout)
@@ -265,9 +289,11 @@ tool_stage_4 = FunctionTool(search_stage_4_counter_narratives)
 tool_stage_5 = FunctionTool(search_stage_5_analogous_precedents)
 tool_stage_6 = FunctionTool(search_stage_6_forward_calendar)
 tool_stage_7 = FunctionTool(search_stage_7_primary_source_filings)
+tool_stage_8 = FunctionTool(search_stage_8_social_sentiment)
 
 BREAKING_TOOLS = [tool_stage_1, tool_stage_2]
 PRECEDENT_TOOLS = [tool_stage_3, tool_stage_4, tool_stage_5]
+SOCIAL_TOOLS = [tool_stage_8]
 CALENDAR_TOOLS = [tool_stage_6, tool_stage_7]
 ALL_SEARCH_TOOLS = [
     tool_stage_1,
@@ -277,4 +303,6 @@ ALL_SEARCH_TOOLS = [
     tool_stage_5,
     tool_stage_6,
     tool_stage_7,
+    tool_stage_8,
 ]
+

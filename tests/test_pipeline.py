@@ -23,13 +23,14 @@ from tools.search_tool import generate_stage_queries, STAGE_DEFINITIONS
 class TestNewsIntelligenceUnit(unittest.TestCase):
 
     def test_stage_definitions_and_queries(self):
-        """Verify all 7 stages are defined with query templates matching master_prompt.md."""
-        self.assertEqual(len(STAGE_DEFINITIONS), 7)
-        for stage_id in range(1, 8):
+        """Verify all 8 stages are defined with query templates matching master_prompt.md."""
+        self.assertEqual(len(STAGE_DEFINITIONS), 8)
+        for stage_id in range(1, 9):
             self.assertIn(stage_id, STAGE_DEFINITIONS)
             queries = generate_stage_queries("RBI digital lending guidelines", stage_id)
             self.assertTrue(len(queries) >= 1)
             self.assertIsInstance(queries[0], str)
+
 
     def test_synthesis_formatting_with_publication_links(self):
         """Verify report properly formats Baseline Brief, 8 Inquiry Archetypes, and clickable publication source links."""

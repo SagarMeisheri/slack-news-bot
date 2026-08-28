@@ -18,9 +18,11 @@ STAGE_NAMES = {
     "safety": "Safety & Compliance Triage",
     "breaking": "Breaking & Fallout Search",
     "precedent": "Precedent & Counter-Narratives",
+    "social": "Public Sentiment & Social Media Buzz",
     "calendar": "Forward Calendar & Primary Sources",
     "synthesis": "Synthesis & Scenario Analysis",
 }
+
 
 STATUS_ICONS = {
     "pending": "⚪",
@@ -511,8 +513,35 @@ def build_thread_deepdive_blocks(
         {"type": "divider"},
     ]
 
+    # Public Sentiment & Community Buzz Block
+    if report.social_findings:
+        soc = report.social_findings
+        soc_lines = [f"📊 *Community Mood:* {convert_markdown_to_slack_mrkdwn(soc.sentiment_overview)}"]
+        if soc.dominant_narratives:
+            soc_lines.append("*Prevailing Grassroots Narratives:*")
+            for narr in soc.dominant_narratives[:3]:
+                soc_lines.append(f"• {convert_markdown_to_slack_mrkdwn(narr)}")
+        if soc.viral_claims_or_memes:
+            soc_lines.append("*Viral Buzz & Talking Points:*")
+            for clm in soc.viral_claims_or_memes[:2]:
+                soc_lines.append(f"• {convert_markdown_to_slack_mrkdwn(clm)}")
+        if soc.community_quotes:
+            for q in soc.community_quotes[:2]:
+                soc_lines.append(f"• _{convert_markdown_to_slack_mrkdwn(q)}_")
+
+        blocks.append({
+            "type": "section",
+            "expand": True,
+            "text": {
+                "type": "mrkdwn",
+                "text": f"💬 *PUBLIC SENTIMENT & SOCIAL MEDIA BUZZ*\n" + "\n".join(soc_lines),
+            },
+        })
+        blocks.append({"type": "divider"})
+
     # Inquiries with Synthesized Answers (Individual Bite-Sized Expanded Blocks)
     if report.inquiries:
+
         # Cap at 15 inquiries to stay well within Slack's 50-block cap
         for idx, inq in enumerate(report.inquiries[:15], start=1):
             arch_val = inq.archetype.value if hasattr(inq.archetype, "value") else str(inq.archetype)

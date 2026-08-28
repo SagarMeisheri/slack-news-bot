@@ -92,6 +92,7 @@ class TestSlackBotUI(unittest.TestCase):
             "safety": "completed",
             "breaking": "running",
             "precedent": "pending",
+            "social": "pending",
             "calendar": "pending",
             "synthesis": "pending",
         }
@@ -109,6 +110,8 @@ class TestSlackBotUI(unittest.TestCase):
         self.assertIn("Semiconductor Tariff Impact", section_text)
         self.assertIn("✅ *Safety & Compliance Triage*", section_text)
         self.assertIn("⏳ *Breaking & Fallout Search*", section_text)
+        self.assertIn("Public Sentiment & Social Media Buzz", section_text)
+
         self.assertIn("Querying Parallel search API", section_text)
 
     def test_build_safety_suppression_blocks(self):

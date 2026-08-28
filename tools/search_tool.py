@@ -67,6 +67,13 @@ STAGE_DEFINITIONS: Dict[int, Dict[str, Any]] = {
         "query_template": '"{topic}" (site:pib.gov.in OR site:sebi.gov.in OR site:rbi.org.in OR site:bseindia.com OR site:gov.in)',
         "feeds": "Baseline Brief citation quality; Why X?",
     },
+    8: {
+        "name": "Social Media Sentiment & Grassroots Reaction",
+        "time_window": "Recent: 0–30 days",
+        "focus": "Public discussions, community reactions, viral talking points, user sentiment across Reddit, X/Twitter, Threads, YouTube, Hacker News, LinkedIn",
+        "query_template": '"{topic}" (site:reddit.com OR site:x.com OR site:twitter.com OR site:threads.net OR site:youtube.com OR "social media reaction" OR "public sentiment")',
+        "feeds": "Public Sentiment & Social Media Buzz; Who Benefits / Who Loses; What It Means",
+    },
 }
 
 
@@ -121,8 +128,16 @@ def generate_stage_queries(topic: str, stage_id: int, custom_subtopic: Optional[
             f'"{clean_topic}" site:rbi.org.in OR site:sebi.gov.in',
             f'"{clean_topic}" official gazette circular notification',
         ]
+    elif stage_id == 8:
+        return [
+            f'"{clean_topic}" (site:reddit.com OR site:x.com OR site:twitter.com OR site:threads.net)',
+            f'"{clean_topic}" (site:youtube.com OR site:news.ycombinator.com OR site:linkedin.com)',
+            f'"{clean_topic}" "social media reaction" OR "public backlash" OR "viral" OR "trending"',
+            f'"{clean_topic}" "users say" OR "community sentiment" OR "controversy" OR "memes"',
+        ]
     else:
         return [f'"{clean_topic}" news latest updates']
+
 
 
 async def execute_stage_search(

@@ -58,10 +58,12 @@ from schemas.models import (
     RequestIntent,
     SafetyCheckResult,
     SearchStageResult,
+    SocialFindings,
     SpeculativeInquiry,
     SuppressionStatus,
     SynthesisOutput,
 )
+
 from slack_ui import (
     build_executive_report_blocks,
     build_news_error_blocks,
@@ -74,7 +76,13 @@ from slack_ui import (
     build_thread_deepdive_blocks,
 )
 
-from storage import save_report, save_stage_checkpoint
+from storage import (
+    find_latest_checkpoint_for_topic,
+    load_checkpoint_file,
+    save_report,
+    save_stage_checkpoint,
+)
+
 from tools.sarvam_client import SarvamOCRClient, SarvamOCRError
 from tools.search_tool import consolidate_citations
 
@@ -96,14 +104,17 @@ AGENT_MAP = {
     "Safety_Triage_Agent": "safety",
     "Breaking_Fallout_Investigator": "breaking",
     "Precedent_Counter_Investigator": "precedent",
+    "Social_Media_Sentiment_Investigator": "social",
     "Calendar_Filings_Investigator": "calendar",
     "Synthesis_Neutrality_Auditor": "synthesis",
     "SafetyAgent": "safety",
     "BreakingInvestigator": "breaking",
     "PrecedentInvestigator": "precedent",
+    "SocialInvestigator": "social",
     "CalendarInvestigator": "calendar",
     "SynthesisAgent": "synthesis",
 }
+
 
 # Initialize Async Bolt App
 app = AsyncApp(
@@ -136,7 +147,10 @@ def _reconstruct_report_from_state(
     raw_stages_1_2 = state.get("stages_1_2", {})
     raw_stages_3_5 = state.get("stages_3_5", {})
     raw_stages_6_7 = state.get("stages_6_7", {})
+    raw_stages_8 = state.get("stages_8", {})
     raw_synthesis = state.get("synthesis_output", {})
+
+    social_findings = SocialFindings.model_validate(raw_stages_8) if raw_stages_8 else None
 
     reconstructed_stages: list[SearchStageResult] = [
         SearchStageResult(
@@ -202,6 +216,15 @@ def _reconstruct_report_from_state(
             excerpts=[],
             citations=raw_stages_6_7.get("citations", []),
         ),
+        SearchStageResult(
+            stage_id=8,
+            stage_name="Social Media Sentiment & Community Buzz",
+            time_window="Recent: 0–30 days",
+            objective=f"Public sentiment and community discussions for '{topic}'",
+            findings_summary=raw_stages_8.get("sentiment_overview", "Social media discussions investigated."),
+            excerpts=raw_stages_8.get("community_quotes", []),
+            citations=raw_stages_8.get("citations", []),
+        ),
     ]
 
     raw_brief = raw_synthesis.get("baseline_brief", {})
@@ -230,8 +253,9 @@ def _reconstruct_report_from_state(
     citations_1_2 = raw_stages_1_2.get("citations", [])
     citations_3_5 = raw_stages_3_5.get("citations", [])
     citations_6_7 = raw_stages_6_7.get("citations", [])
+    citations_8 = raw_stages_8.get("citations", [])
     citations_synth = raw_synthesis.get("citations", [])
-    citations_all = consolidate_citations(citations_1_2, citations_3_5, citations_6_7, citations_synth)
+    citations_all = consolidate_citations(citations_1_2, citations_3_5, citations_6_7, citations_8, citations_synth)
 
     exec_summary = (
         raw_synthesis.get("executive_summary")
@@ -248,6 +272,7 @@ def _reconstruct_report_from_state(
         jurisdiction=jurisdiction_str,
         safety_result=safety_res,
         baseline_brief=baseline_brief,
+        social_findings=social_findings,
         inquiries=inquiries,
         citations=citations_all,
     )
@@ -262,12 +287,14 @@ def _reconstruct_report_from_state(
         safety_result=safety_res,
         search_stages=reconstructed_stages,
         baseline_brief=baseline_brief,
+        social_findings=social_findings,
         inquiries=inquiries,
         citations_all=citations_all,
         formatted_markdown=rendered_markdown,
         execution_time_seconds=execution_time,
         observability_report=obs_report,
     )
+
 
 
 # ---------------------------------------------------------
@@ -416,25 +443,75 @@ async def execute_adk_pipeline_for_slack(
     topic: str,
     user_id: str = "slack_user",
     jurisdiction_str: str = "India",
+    resume_from_checkpoint: bool = True,
+    checkpoint_file: Optional[str] = None,
 ):
     """
-    Executes the 5-agent ADK Sequential Pipeline asynchronously,
-    updating the Slack channel with live progress blocks, then delivering
-    the Executive Briefing and Scenario Deep-Dive.
+    Executes the ADK News Intelligence Pipeline asynchronously,
+    updating the Slack channel with live progress blocks.
+    Automatically resumes from saved checkpoints to avoid re-running completed search stages.
     """
     target_channel = channel_id
     statuses: Dict[str, str] = {
-        "safety": "running",
+        "safety": "pending",
         "breaking": "pending",
         "precedent": "pending",
+        "social": "pending",
         "calendar": "pending",
         "synthesis": "pending",
     }
 
+    resume_state: Optional[Dict[str, Any]] = None
+    resumed_stage_count = 0
+
+    if resume_from_checkpoint:
+        checkpoint_data = None
+        if checkpoint_file:
+            checkpoint_data = load_checkpoint_file(checkpoint_file)
+        if not checkpoint_data:
+            checkpoint_data = find_latest_checkpoint_for_topic(topic)
+
+        if checkpoint_data and checkpoint_data.get("state"):
+            raw_state = checkpoint_data["state"]
+            if any(k in raw_state for k in ["stages_1_2", "stages_3_5", "stages_8", "stages_6_7"]):
+                resume_state = dict(raw_state)
+                logger.info(f"Resuming pipeline for topic '{topic}' from checkpoint with keys: {list(resume_state.keys())}")
+
+    if resume_state:
+        if resume_state.get("safety_result"):
+            statuses["safety"] = "completed"
+            resumed_stage_count += 1
+        if resume_state.get("stages_1_2"):
+            statuses["breaking"] = "completed"
+            resumed_stage_count += 1
+        if resume_state.get("stages_3_5"):
+            statuses["precedent"] = "completed"
+            resumed_stage_count += 1
+        if resume_state.get("stages_8"):
+            statuses["social"] = "completed"
+            resumed_stage_count += 1
+        if resume_state.get("stages_6_7"):
+            statuses["calendar"] = "completed"
+            resumed_stage_count += 1
+        if resume_state.get("synthesis_output"):
+            statuses["synthesis"] = "completed"
+
+    # Set the first pending stage to running
+    for k in ["safety", "breaking", "precedent", "social", "calendar", "synthesis"]:
+        if statuses[k] == "pending":
+            statuses[k] = "running"
+            break
+
+    initial_msg = (
+        f"⚡ Resuming from saved checkpoint ({resumed_stage_count} stages loaded, skipping completed searches)..."
+        if resumed_stage_count > 0
+        else "🚀 Initializing ADK News Intelligence Agents..."
+    )
+
     initial_blocks = build_progress_blocks(
         topic=topic,
         statuses=statuses,
-        status_message="🚀 Initializing ADK News Intelligence Agents...",
+        status_message=initial_msg,
     )
 
     resp = await client.chat_postMessage(
@@ -466,13 +543,17 @@ async def execute_adk_pipeline_for_slack(
         pipeline_agent, runner, tracker = build_adk_news_pipeline(
             jurisdiction=jurisdiction_str,
             app_name=f"slack_bot_{user_id}",
+            resume_state=resume_state,
         )
 
         adk_user_id = f"slack_{user_id}"
+        init_state = dict(resume_state) if resume_state else {}
+        init_state.update({"query_topic": topic, "topic": topic, "jurisdiction": jurisdiction_str})
+
         session = await runner.session_service.create_session(
             user_id=adk_user_id,
             app_name=runner.app_name,
-            state={"query_topic": topic, "jurisdiction": jurisdiction_str},
+            state=init_state,
         )
 
         start_time = asyncio.get_event_loop().time()
@@ -481,14 +562,15 @@ async def execute_adk_pipeline_for_slack(
             parts=[types.Part.from_text(text=f"Analyze topic: '{topic}' in jurisdiction '{jurisdiction_str}'.")],
         )
 
-        current_agent_key = "safety"
-        last_known_state: Dict[str, Any] = {}
+        current_agent_key = next((k for k, v in statuses.items() if v == "running"), "safety")
+        last_known_state: Dict[str, Any] = dict(init_state)
 
         async for event in runner.run_async(
             user_id=adk_user_id,
             session_id=session.id,
             new_message=user_msg,
         ):
+
             author = getattr(event, "author", None)
             if author:
                 matched_key = AGENT_MAP.get(author)
@@ -540,8 +622,14 @@ async def execute_adk_pipeline_for_slack(
             session_id=session.id,
             app_name=runner.app_name,
         )
-        state = final_session.state or last_known_state
+        merged_state = dict(init_state)
+        if final_session and final_session.state:
+            merged_state.update(final_session.state)
+        elif last_known_state:
+            merged_state.update(last_known_state)
+        state = merged_state
         execution_time = asyncio.get_event_loop().time() - start_time
+
 
         # Save completed state checkpoint to disk
         save_stage_checkpoint(topic=topic, stage_name="pipeline_completed", state_data=state)

@@ -85,6 +85,12 @@ class PromptRegistry(BaseModel):
             vars_dict["today_date"] = today_date
         return self.load("calendar_agent", vars_dict)
 
+    def get_social_prompt(self, today_date: Optional[str] = None) -> str:
+        vars_dict = {}
+        if today_date:
+            vars_dict["today_date"] = today_date
+        return self.load("social_agent", vars_dict)
+
     def get_synthesis_prompt(self, jurisdiction: str = "India", today_date: Optional[str] = None) -> str:
         vars_dict = {"jurisdiction": jurisdiction}
         if today_date:
@@ -94,3 +100,4 @@ class PromptRegistry(BaseModel):
 
 # Global default instance
 prompt_registry = PromptRegistry()
+
